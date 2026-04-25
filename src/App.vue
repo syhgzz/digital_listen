@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useSpeechSynthesis } from './composables/useSpeechSynthesis'
-import type { ModuleSettings, PracticeItem, PracticeModule } from './types/practice'
+import type { ModuleSettings, PracticeItem, PracticeModule, SpeechRatePreset } from './types/practice'
 import {
   createDatePracticeItems,
   createNumberPracticeItems,
@@ -21,6 +21,8 @@ interface PersistedSettings {
     fractionDigits?: number
   }
   voiceURI?: string
+  speechRatePreset?: SpeechRatePreset
+  showAnswers?: boolean
 }
 
 const SESSION_SIZE = 30
@@ -32,6 +34,12 @@ const moduleLabels: Record<PracticeModule, string> = {
   number: '数字听力',
 }
 const modules: PracticeModule[] = ['phone', 'date', 'number']
+const speechRatePresets: SpeechRatePreset[] = ['normal', 'slightlyFast', 'fastest']
+const speechRateLabels: Record<SpeechRatePreset, string> = {
+  normal: '正常',
+  slightlyFast: '稍快',
+  fastest: '最快',
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
@@ -39,10 +47,15 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const asInteger = (value: unknown): number | null =>
   typeof value === 'number' && Number.isInteger(value) ? value : null
 
+const asBoolean = (value: unknown): boolean | null => (typeof value === 'boolean' ? value : null)
+
 const asDateString = (value: unknown): string | null =>
   typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null
 
 const asString = (value: unknown): string | null => (typeof value === 'string' ? value : null)
+
+const asSpeechRatePreset = (value: unknown): SpeechRatePreset | null =>
+  value === 'normal' || value === 'slightlyFast' || value === 'fastest' ? value : null
 
 const toISODate = (date: Date): string => {
   const year = String(date.getFullYear())
@@ -107,11 +120,12 @@ const settings = reactive<ModuleSettings>({
 const activeModule = ref<PracticeModule>('phone')
 const sessionItems = ref<PracticeItem[]>([])
 const currentIndex = ref(0)
-const answerVisible = ref(false)
+const showAnswers = ref(asBoolean(persistedSettings.showAnswers) ?? false)
 const moduleError = ref('')
 
 const {
   availableVoices,
+  selectedRatePreset,
   selectedVoiceURI,
   speaking,
   supported: ttsSupported,
@@ -122,6 +136,7 @@ const {
   langPrefix: 'en-US',
   maxVoices: 5,
   initialVoiceURI: asString(persistedSettings.voiceURI) ?? undefined,
+  initialRatePreset: asSpeechRatePreset(persistedSettings.speechRatePreset) ?? 'normal',
 })
 
 const currentItem = computed(() => sessionItems.value[currentIndex.value] ?? null)
@@ -129,6 +144,21 @@ const hasNextItem = computed(() => currentIndex.value < sessionItems.value.lengt
 const progressLabel = computed(() =>
   sessionItems.value.length > 0 ? `${currentIndex.value + 1} / ${sessionItems.value.length}` : '未开始',
 )
+
+const isInteractiveTarget = (target: EventTarget | null): boolean => {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+
+  return (
+    target.isContentEditable ||
+    Boolean(
+      target.closest(
+        'input, textarea, select, button, a, summary, details, [role="button"], [role="link"]',
+      ),
+    )
+  )
+}
 
 const validatePhoneModule = (): string => {
   if (!Number.isInteger(settings.phone.digitCount)) {
@@ -176,7 +206,6 @@ const clearSession = () => {
   stop()
   sessionItems.value = []
   currentIndex.value = 0
-  answerVisible.value = false
 }
 
 const speakCurrentItem = () => {
@@ -222,7 +251,6 @@ const startSession = () => {
   moduleError.value = ''
   sessionItems.value = buildSessionItems(activeModule.value)
   currentIndex.value = 0
-  answerVisible.value = false
   speakCurrentItem()
 }
 
@@ -248,23 +276,22 @@ const nextItem = () => {
   }
 
   currentIndex.value += 1
-  answerVisible.value = false
   speakCurrentItem()
 }
 
-const toggleAnswer = () => {
-  if (!currentItem.value) {
+const handleGlobalKeydown = (event: KeyboardEvent) => {
+  if (event.defaultPrevented || event.repeat || event.code !== 'Space') {
     return
   }
-  answerVisible.value = !answerVisible.value
-}
+  if (event.altKey || event.ctrlKey || event.metaKey) {
+    return
+  }
+  if (!hasNextItem.value || isInteractiveTarget(event.target)) {
+    return
+  }
 
-const handleVoiceChange = (event: Event) => {
-  const target = event.target
-  if (!(target instanceof HTMLSelectElement)) {
-    return
-  }
-  selectedVoiceURI.value = target.value
+  event.preventDefault()
+  nextItem()
 }
 
 watch(
@@ -274,7 +301,9 @@ watch(
     () => settings.date.endDate,
     () => settings.number.integerDigits,
     () => settings.number.fractionDigits,
+    () => selectedRatePreset.value,
     () => selectedVoiceURI.value,
+    () => showAnswers.value,
   ],
   () => {
     if (typeof window === 'undefined') {
@@ -288,11 +317,21 @@ watch(
         integerDigits: settings.number.integerDigits,
         fractionDigits: settings.number.fractionDigits,
       },
+      speechRatePreset: selectedRatePreset.value,
+      showAnswers: showAnswers.value,
       voiceURI: selectedVoiceURI.value,
     }
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(payload))
   },
 )
+
+onMounted(() => {
+  window.addEventListener('keydown', handleGlobalKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleGlobalKeydown)
+})
 </script>
 
 <template>
@@ -319,12 +358,8 @@ watch(
 
       <div class="settings-grid">
         <label class="field">
-          <span>美式声音（最多 5 个）</span>
-          <select
-            :value="selectedVoiceURI"
-            :disabled="availableVoices.length === 0"
-            @change="handleVoiceChange"
-          >
+          <span>自然语音引擎（最多 5 个）</span>
+          <select v-model="selectedVoiceURI" :disabled="availableVoices.length === 0">
             <option value="" disabled>
               {{ availableVoices.length > 0 ? '请选择声音' : '暂无可用 en-US 声音' }}
             </option>
@@ -337,6 +372,24 @@ watch(
             </option>
           </select>
         </label>
+
+        <label class="field">
+          <span>语速</span>
+          <select v-model="selectedRatePreset">
+            <option v-for="preset in speechRatePresets" :key="preset" :value="preset">
+              {{ speechRateLabels[preset] }}
+            </option>
+          </select>
+        </label>
+
+        <div class="field">
+          <span>显示答案</span>
+          <label class="switch-field">
+            <input v-model="showAnswers" class="switch-input" type="checkbox" />
+            <span class="switch-track" aria-hidden="true"></span>
+            <span class="switch-text">{{ showAnswers ? '已开启' : '已关闭' }}</span>
+          </label>
+        </div>
 
         <template v-if="activeModule === 'phone'">
           <label class="field">
@@ -387,22 +440,20 @@ watch(
         <button type="button" :disabled="!currentItem || !ttsSupported" @click="repeatCurrent">
           重复发音
         </button>
-        <button type="button" :disabled="!hasNextItem" @click="nextItem">下一个</button>
-        <button type="button" :disabled="!currentItem" @click="toggleAnswer">
-          {{ answerVisible ? '隐藏答案' : '显示答案' }}
-        </button>
+        <button type="button" :disabled="!hasNextItem" @click="nextItem">下一个（空格）</button>
       </div>
 
       <div class="status">
         <span>当前模块：{{ moduleLabels[activeModule] }}</span>
         <span>进度：{{ progressLabel }}</span>
         <span v-if="speaking">状态：朗读中...</span>
+        <span v-if="currentItem && hasNextItem">快捷键：按空格进入下一题</span>
       </div>
 
       <div v-if="currentItem" class="question-card">
         <p class="title">请听并写下你听到的内容</p>
-        <p v-if="answerVisible" class="answer">{{ currentItem.answerText }}</p>
-        <p v-else class="masked">答案已隐藏，点击“显示答案”查看。</p>
+        <p v-if="showAnswers" class="answer">{{ currentItem.answerText }}</p>
+        <p v-else class="masked">答案当前隐藏，可打开“显示答案”开关查看。</p>
       </div>
       <div v-else class="question-card empty">点击“随机生成 30 题并开始”后会自动朗读第一题。</div>
     </section>

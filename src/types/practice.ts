@@ -1,4 +1,5 @@
 export type PracticeModule = 'phone' | 'date' | 'number'
+export type SpeechRatePreset = 'normal' | 'slightlyFast' | 'fastest'
 
 export interface PracticeItem {
   id: string

@@ -1,9 +1,11 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import type { SpeechRatePreset } from '../types/practice'
 
 interface UseSpeechSynthesisOptions {
   langPrefix?: string
   maxVoices?: number
   initialVoiceURI?: string
+  initialRatePreset?: SpeechRatePreset
 }
 
 const isSpeechSynthesisAvailable = (): boolean =>
@@ -11,9 +13,27 @@ const isSpeechSynthesisAvailable = (): boolean =>
   'speechSynthesis' in window &&
   'SpeechSynthesisUtterance' in window
 
+const NATURAL_VOICE_KEYWORDS = ['natural', 'neural', 'premium', 'enhanced', 'siri']
+
+const speechRateByPreset: Record<SpeechRatePreset, number> = {
+  normal: 1,
+  slightlyFast: 1.2,
+  fastest: 1.4,
+}
+
+const getVoicePriority = (voice: SpeechSynthesisVoice): number => {
+  const name = voice.name.toLowerCase()
+  const keywordScore = NATURAL_VOICE_KEYWORDS.some((keyword) => name.includes(keyword)) ? 4 : 0
+  const defaultScore = voice.default ? 2 : 0
+  const googleScore = name.includes('google') ? 1 : 0
+
+  return keywordScore + defaultScore + googleScore
+}
+
 export const useSpeechSynthesis = (options: UseSpeechSynthesisOptions = {}) => {
   const supported = isSpeechSynthesisAvailable()
   const selectedVoiceURI = ref(options.initialVoiceURI ?? '')
+  const selectedRatePreset = ref<SpeechRatePreset>(options.initialRatePreset ?? 'normal')
   const allVoices = ref<SpeechSynthesisVoice[]>([])
   const speaking = ref(false)
   const ttsError = ref('')
@@ -22,8 +42,15 @@ export const useSpeechSynthesis = (options: UseSpeechSynthesisOptions = {}) => {
   const maxVoices = options.maxVoices ?? 5
 
   const availableVoices = computed(() =>
-    allVoices.value
+    [...allVoices.value]
       .filter((voice) => voice.lang.toLowerCase().startsWith(voicePrefix))
+      .sort((left, right) => {
+        const priorityDiff = getVoicePriority(right) - getVoicePriority(left)
+        if (priorityDiff !== 0) {
+          return priorityDiff
+        }
+        return left.name.localeCompare(right.name)
+      })
       .slice(0, maxVoices),
   )
 
@@ -79,6 +106,7 @@ export const useSpeechSynthesis = (options: UseSpeechSynthesisOptions = {}) => {
     if (selectedVoice) {
       utterance.voice = selectedVoice
     }
+    utterance.rate = speechRateByPreset[selectedRatePreset.value]
 
     utterance.onstart = () => {
       speaking.value = true
@@ -112,6 +140,7 @@ export const useSpeechSynthesis = (options: UseSpeechSynthesisOptions = {}) => {
 
   return {
     availableVoices,
+    selectedRatePreset,
     selectedVoiceURI,
     speaking,
     supported,
