@@ -41,8 +41,8 @@ export const useSpeechSynthesis = (options: UseSpeechSynthesisOptions = {}) => {
   const voicePrefix = (options.langPrefix ?? 'en-US').toLowerCase()
   const maxVoices = options.maxVoices ?? 5
 
-  const availableVoices = computed(() =>
-    [...allVoices.value]
+  const availableVoices = computed(() => {
+    const filtered = [...allVoices.value]
       .filter((voice) => voice.lang.toLowerCase().startsWith(voicePrefix))
       .sort((left, right) => {
         const priorityDiff = getVoicePriority(right) - getVoicePriority(left)
@@ -51,8 +51,14 @@ export const useSpeechSynthesis = (options: UseSpeechSynthesisOptions = {}) => {
         }
         return left.name.localeCompare(right.name)
       })
-      .slice(0, maxVoices),
-  )
+
+    const top = filtered.slice(0, maxVoices)
+    const defaultVoice = filtered.find((voice) => voice.default)
+    if (defaultVoice && !top.some((voice) => voice.voiceURI === defaultVoice.voiceURI)) {
+      top[top.length - 1] = defaultVoice
+    }
+    return top
+  })
 
   const updateVoiceList = () => {
     if (!supported) {
@@ -70,7 +76,8 @@ export const useSpeechSynthesis = (options: UseSpeechSynthesisOptions = {}) => {
 
       const isCurrentStillAvailable = voices.some((voice) => voice.voiceURI === selectedVoiceURI.value)
       if (!isCurrentStillAvailable) {
-        selectedVoiceURI.value = voices[0].voiceURI
+        const systemDefault = voices.find((voice) => voice.default)
+        selectedVoiceURI.value = systemDefault ? systemDefault.voiceURI : voices[0].voiceURI
       }
     },
     { immediate: true },
@@ -103,6 +110,8 @@ export const useSpeechSynthesis = (options: UseSpeechSynthesisOptions = {}) => {
     utterance.lang = 'en-US'
 
     const selectedVoice = availableVoices.value.find((voice) => voice.voiceURI === selectedVoiceURI.value)
+      ?? allVoices.value.find((voice) => voice.default)
+      ?? allVoices.value[0]
     if (selectedVoice) {
       utterance.voice = selectedVoice
     }
