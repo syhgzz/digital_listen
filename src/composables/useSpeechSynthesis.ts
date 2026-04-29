@@ -53,7 +53,7 @@ export const useSpeechSynthesis = (options: UseSpeechSynthesisOptions = {}) => {
       })
 
     const top = filtered.slice(0, maxVoices)
-    const defaultVoice = filtered.find((voice) => voice.default)
+    const defaultVoice = allVoices.value.find((voice) => voice.default)
     if (defaultVoice && !top.some((voice) => voice.voiceURI === defaultVoice.voiceURI)) {
       top[top.length - 1] = defaultVoice
     }
