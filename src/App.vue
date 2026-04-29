@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { SYSTEM_DEFAULT_VOICE_URI, useTts } from './composables/useTts'
+import { useTts } from './composables/useTts'
 import type { ModuleSettings, PracticeItem, PracticeModule, SpeechRatePreset } from './types/practice'
-import type { TtsEnginePreference } from './composables/useTts'
 import {
   createDatePracticeItems,
   createNumberPracticeItems,
@@ -23,7 +22,6 @@ interface PersistedSettings {
   }
   voiceURI?: string
   speechRatePreset?: SpeechRatePreset
-  enginePreference?: TtsEnginePreference
   showAnswers?: boolean
 }
 
@@ -48,13 +46,6 @@ const engineSourceLabels = {
   online: '在线语音引擎',
   none: '暂无可用语音引擎',
 } as const
-const enginePreferenceLabels: Record<TtsEnginePreference, string> = {
-  auto: '自动择优（OS → 本地 → 在线）',
-  os: '仅操作系统内部语音引擎',
-  local: '仅本地开源语音引擎',
-  online: '仅在线语音引擎',
-}
-const enginePreferences: TtsEnginePreference[] = ['auto', 'os', 'local', 'online']
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
@@ -71,9 +62,6 @@ const asString = (value: unknown): string | null => (typeof value === 'string' ?
 
 const asSpeechRatePreset = (value: unknown): SpeechRatePreset | null =>
   value === 'normal' || value === 'slightlyFast' || value === 'fastest' ? value : null
-
-const asEnginePreference = (value: unknown): TtsEnginePreference | null =>
-  value === 'auto' || value === 'os' || value === 'local' || value === 'online' ? value : null
 
 const toISODate = (date: Date): string => {
   const year = String(date.getFullYear())
@@ -143,11 +131,9 @@ const moduleError = ref('')
 
 const {
   activeEngineSource,
+  allVoiceOptions,
   anyEngineConfigured,
   availableVoices,
-  defaultVoiceDisplayName,
-  engineAvailability,
-  selectedEnginePreference,
   selectedRatePreset,
   selectedVoiceURI,
   speaking,
@@ -159,7 +145,6 @@ const {
   maxVoices: 5,
   initialVoiceURI: asString(persistedSettings.voiceURI) ?? undefined,
   initialRatePreset: asSpeechRatePreset(persistedSettings.speechRatePreset) ?? 'normal',
-  initialEnginePreference: asEnginePreference(persistedSettings.enginePreference) ?? 'auto',
 })
 
 const currentItem = computed(() => sessionItems.value[currentIndex.value] ?? null)
@@ -351,7 +336,6 @@ watch(
     () => settings.number.fractionDigits,
     () => selectedRatePreset.value,
     () => selectedVoiceURI.value,
-    () => selectedEnginePreference.value,
     () => showAnswers.value,
   ],
   () => {
@@ -366,7 +350,6 @@ watch(
         integerDigits: settings.number.integerDigits,
         fractionDigits: settings.number.fractionDigits,
       },
-      enginePreference: selectedEnginePreference.value,
       speechRatePreset: selectedRatePreset.value,
       showAnswers: showAnswers.value,
       voiceURI: selectedVoiceURI.value,
@@ -409,18 +392,17 @@ onUnmounted(() => {
 
       <div class="settings-grid">
         <label class="field">
-          <span>自然语音引擎（最多 5 个）</span>
-          <select v-model="selectedVoiceURI">
+          <span>语音引擎</span>
+          <select v-model="selectedVoiceURI" :disabled="allVoiceOptions.length === 0">
             <option value="" disabled>
-              {{ availableVoices.length > 0 ? '请选择声音' : '暂无可用 en-US 声音' }}
+              {{ allVoiceOptions.length > 0 ? '请选择语音' : '暂无可用语音引擎' }}
             </option>
-            <option :value="SYSTEM_DEFAULT_VOICE_URI">{{ defaultVoiceDisplayName }}</option>
             <option
-              v-for="voice in availableVoices"
-              :key="voice.voiceURI"
-              :value="voice.voiceURI"
+              v-for="opt in allVoiceOptions"
+              :key="opt.id"
+              :value="opt.id"
             >
-              {{ voice.name }}（{{ voice.lang }}）
+              {{ opt.name }}（{{ opt.sourceLabel }}）
             </option>
           </select>
         </label>
@@ -430,22 +412,6 @@ onUnmounted(() => {
           <select v-model="selectedRatePreset">
             <option v-for="preset in speechRatePresets" :key="preset" :value="preset">
               {{ speechRateLabels[preset] }}
-            </option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span>语音引擎策略</span>
-          <select v-model="selectedEnginePreference">
-            <option v-for="engine in enginePreferences" :key="engine" :value="engine">
-              {{ enginePreferenceLabels[engine] }}
-              {{
-                engine === 'auto'
-                  ? ''
-                  : engineAvailability[engine]
-                    ? '（可用）'
-                    : '（当前不可用）'
-              }}
             </option>
           </select>
         </label>
