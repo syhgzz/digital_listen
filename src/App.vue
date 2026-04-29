@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { useSpeechSynthesis } from './composables/useSpeechSynthesis'
+import { SYSTEM_DEFAULT_VOICE_URI, useTts } from './composables/useTts'
 import type { ModuleSettings, PracticeItem, PracticeModule, SpeechRatePreset } from './types/practice'
+import type { TtsEnginePreference } from './composables/useTts'
 import {
   createDatePracticeItems,
   createNumberPracticeItems,
@@ -22,6 +23,7 @@ interface PersistedSettings {
   }
   voiceURI?: string
   speechRatePreset?: SpeechRatePreset
+  enginePreference?: TtsEnginePreference
   showAnswers?: boolean
 }
 
@@ -40,6 +42,19 @@ const speechRateLabels: Record<SpeechRatePreset, string> = {
   slightlyFast: '稍快',
   fastest: '最快',
 }
+const engineSourceLabels = {
+  os: '操作系统内部语音引擎',
+  local: '本地开源语音引擎',
+  online: '在线语音引擎',
+  none: '暂无可用语音引擎',
+} as const
+const enginePreferenceLabels: Record<TtsEnginePreference, string> = {
+  auto: '自动择优（OS → 本地 → 在线）',
+  os: '仅操作系统内部语音引擎',
+  local: '仅本地开源语音引擎',
+  online: '仅在线语音引擎',
+}
+const enginePreferences: TtsEnginePreference[] = ['auto', 'os', 'local', 'online']
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
@@ -56,6 +71,9 @@ const asString = (value: unknown): string | null => (typeof value === 'string' ?
 
 const asSpeechRatePreset = (value: unknown): SpeechRatePreset | null =>
   value === 'normal' || value === 'slightlyFast' || value === 'fastest' ? value : null
+
+const asEnginePreference = (value: unknown): TtsEnginePreference | null =>
+  value === 'auto' || value === 'os' || value === 'local' || value === 'online' ? value : null
 
 const toISODate = (date: Date): string => {
   const year = String(date.getFullYear())
@@ -124,19 +142,24 @@ const showAnswers = ref(asBoolean(persistedSettings.showAnswers) ?? false)
 const moduleError = ref('')
 
 const {
+  activeEngineSource,
+  anyEngineConfigured,
   availableVoices,
+  defaultVoiceDisplayName,
+  engineAvailability,
+  selectedEnginePreference,
   selectedRatePreset,
   selectedVoiceURI,
   speaking,
-  supported: ttsSupported,
   ttsError,
   speak,
   stop,
-} = useSpeechSynthesis({
+} = useTts({
   langPrefix: 'en-US',
   maxVoices: 5,
   initialVoiceURI: asString(persistedSettings.voiceURI) ?? undefined,
   initialRatePreset: asSpeechRatePreset(persistedSettings.speechRatePreset) ?? 'normal',
+  initialEnginePreference: asEnginePreference(persistedSettings.enginePreference) ?? 'auto',
 })
 
 const currentItem = computed(() => sessionItems.value[currentIndex.value] ?? null)
@@ -212,7 +235,7 @@ const speakCurrentItem = () => {
   if (!currentItem.value) {
     return
   }
-  speak(currentItem.value.speakText)
+  void speak(currentItem.value.speakText)
 }
 
 const buildSessionItems = (module: PracticeModule): PracticeItem[] => {
@@ -254,6 +277,10 @@ const startSession = () => {
   speakCurrentItem()
 }
 
+const restartSession = () => {
+  startSession()
+}
+
 const switchModule = (module: PracticeModule) => {
   if (activeModule.value === module) {
     return
@@ -261,6 +288,7 @@ const switchModule = (module: PracticeModule) => {
   activeModule.value = module
   moduleError.value = ''
   clearSession()
+  startSession()
 }
 
 const repeatCurrent = () => {
@@ -280,18 +308,38 @@ const nextItem = () => {
 }
 
 const handleGlobalKeydown = (event: KeyboardEvent) => {
-  if (event.defaultPrevented || event.repeat || event.code !== 'Space') {
+  if (event.defaultPrevented || event.repeat) {
     return
   }
   if (event.altKey || event.ctrlKey || event.metaKey) {
     return
   }
-  if (!hasNextItem.value || isInteractiveTarget(event.target)) {
+  if (isInteractiveTarget(event.target)) {
     return
   }
 
-  event.preventDefault()
-  nextItem()
+  if (event.code === 'ArrowRight') {
+    if (!hasNextItem.value) {
+      return
+    }
+    event.preventDefault()
+    nextItem()
+    return
+  }
+
+  if (event.code === 'Space') {
+    if (!currentItem.value) {
+      return
+    }
+    event.preventDefault()
+    repeatCurrent()
+    return
+  }
+
+  if (event.code === 'KeyR') {
+    event.preventDefault()
+    restartSession()
+  }
 }
 
 watch(
@@ -303,6 +351,7 @@ watch(
     () => settings.number.fractionDigits,
     () => selectedRatePreset.value,
     () => selectedVoiceURI.value,
+    () => selectedEnginePreference.value,
     () => showAnswers.value,
   ],
   () => {
@@ -317,6 +366,7 @@ watch(
         integerDigits: settings.number.integerDigits,
         fractionDigits: settings.number.fractionDigits,
       },
+      enginePreference: selectedEnginePreference.value,
       speechRatePreset: selectedRatePreset.value,
       showAnswers: showAnswers.value,
       voiceURI: selectedVoiceURI.value,
@@ -327,6 +377,7 @@ watch(
 
 onMounted(() => {
   window.addEventListener('keydown', handleGlobalKeydown)
+  startSession()
 })
 
 onUnmounted(() => {
@@ -359,10 +410,11 @@ onUnmounted(() => {
       <div class="settings-grid">
         <label class="field">
           <span>自然语音引擎（最多 5 个）</span>
-          <select v-model="selectedVoiceURI" :disabled="availableVoices.length === 0">
+          <select v-model="selectedVoiceURI">
             <option value="" disabled>
               {{ availableVoices.length > 0 ? '请选择声音' : '暂无可用 en-US 声音' }}
             </option>
+            <option :value="SYSTEM_DEFAULT_VOICE_URI">{{ defaultVoiceDisplayName }}</option>
             <option
               v-for="voice in availableVoices"
               :key="voice.voiceURI"
@@ -378,6 +430,22 @@ onUnmounted(() => {
           <select v-model="selectedRatePreset">
             <option v-for="preset in speechRatePresets" :key="preset" :value="preset">
               {{ speechRateLabels[preset] }}
+            </option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>语音引擎策略</span>
+          <select v-model="selectedEnginePreference">
+            <option v-for="engine in enginePreferences" :key="engine" :value="engine">
+              {{ enginePreferenceLabels[engine] }}
+              {{
+                engine === 'auto'
+                  ? ''
+                  : engineAvailability[engine]
+                    ? '（可用）'
+                    : '（当前不可用）'
+              }}
             </option>
           </select>
         </label>
@@ -431,23 +499,24 @@ onUnmounted(() => {
         </template>
       </div>
 
-      <p v-if="!ttsSupported" class="error-text">当前浏览器不支持语音合成，请更换浏览器。</p>
+      <p v-if="!anyEngineConfigured" class="error-text">当前没有可用语音引擎，请先配置本地或在线引擎。</p>
       <p v-if="moduleError" class="error-text">{{ moduleError }}</p>
       <p v-if="ttsError" class="error-text">{{ ttsError }}</p>
 
       <div class="actions">
-        <button type="button" class="primary" @click="startSession">随机生成 30 题并开始</button>
-        <button type="button" :disabled="!currentItem || !ttsSupported" @click="repeatCurrent">
-          重复发音
+        <button type="button" class="primary" @click="restartSession">重新开始（R）</button>
+        <button type="button" :disabled="!currentItem || !anyEngineConfigured" @click="repeatCurrent">
+          重复发音（空格）
         </button>
-        <button type="button" :disabled="!hasNextItem" @click="nextItem">下一个（空格）</button>
+        <button type="button" :disabled="!hasNextItem" @click="nextItem">下一个（→）</button>
       </div>
 
       <div class="status">
         <span>当前模块：{{ moduleLabels[activeModule] }}</span>
         <span>进度：{{ progressLabel }}</span>
+        <span>引擎：{{ engineSourceLabels[activeEngineSource] }}</span>
         <span v-if="speaking">状态：朗读中...</span>
-        <span v-if="currentItem && hasNextItem">快捷键：按空格进入下一题</span>
+        <span v-if="currentItem">快捷键：空格重复，右箭头下一题，R 重新开始</span>
       </div>
 
       <div v-if="currentItem" class="question-card">
@@ -455,7 +524,7 @@ onUnmounted(() => {
         <p v-if="showAnswers" class="answer">{{ currentItem.answerText }}</p>
         <p v-else class="masked">答案当前隐藏，可打开“显示答案”开关查看。</p>
       </div>
-      <div v-else class="question-card empty">点击“随机生成 30 题并开始”后会自动朗读第一题。</div>
+      <div v-else class="question-card empty">启动时会自动准备题目并朗读第一题。</div>
     </section>
   </main>
 </template>
