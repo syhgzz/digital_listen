@@ -133,7 +133,6 @@ const {
   activeEngineSource,
   allVoiceOptions,
   anyEngineConfigured,
-  availableVoices,
   selectedRatePreset,
   selectedVoiceURI,
   speaking,
