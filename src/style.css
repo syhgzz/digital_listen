@@ -78,11 +78,36 @@ body {
   color: #fff;
 }
 
-.settings-grid {
-  display: grid;
+.settings-section {
+  margin-bottom: 16px;
+  border-bottom: 1px solid #e9eef3;
+  padding-bottom: 12px;
+}
+
+.settings-section:last-of-type {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.section-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #627d98;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.section-fields {
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  margin-bottom: 10px;
+}
+
+.static-value {
+  font-size: 15px;
+  color: #102a43;
+  padding: 9px 0;
 }
 
 .field {

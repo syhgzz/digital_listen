@@ -13,6 +13,33 @@ const DIGIT_WORDS: Record<string, string> = {
   '9': 'nine',
 }
 
+const ONES = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
+const TEENS = [
+  'ten',
+  'eleven',
+  'twelve',
+  'thirteen',
+  'fourteen',
+  'fifteen',
+  'sixteen',
+  'seventeen',
+  'eighteen',
+  'nineteen',
+]
+const TENS = [
+  '',
+  '',
+  'twenty',
+  'thirty',
+  'forty',
+  'fifty',
+  'sixty',
+  'seventy',
+  'eighty',
+  'ninety',
+]
+const SCALES = ['', 'thousand', 'million', 'billion', 'trillion']
+
 const longDateFormatter = new Intl.DateTimeFormat('en-US', {
   month: 'long',
   day: 'numeric',
@@ -44,16 +71,43 @@ const digitsToSpeechWords = (value: string): string =>
     .map((char) => DIGIT_WORDS[char] ?? char)
     .join(' ')
 
-const numericToSpeechWords = (value: string): string =>
-  value
-    .split('')
-    .map((char) => {
-      if (char === '.') {
-        return 'point'
-      }
-      return DIGIT_WORDS[char] ?? char
-    })
-    .join(' ')
+const convertHundreds = (n: number): string => {
+  const parts: string[] = []
+  const hundreds = Math.floor(n / 100)
+  const remainder = n % 100
+  if (hundreds > 0) {
+    parts.push(ONES[hundreds] + ' hundred')
+  }
+  if (remainder >= 20) {
+    const tens = Math.floor(remainder / 10)
+    const ones = remainder % 10
+    parts.push(TENS[tens] + (ones > 0 ? '-' + ONES[ones] : ''))
+  } else if (remainder >= 10) {
+    parts.push(TEENS[remainder - 10])
+  } else if (remainder > 0) {
+    parts.push(ONES[remainder])
+  }
+  return parts.join(' ')
+}
+
+const numberToEnglishWords = (numStr: string): string => {
+  if (numStr === '0') return 'zero'
+  if (numStr.length === 0) return ''
+
+  const padded = numStr.padStart(Math.ceil(numStr.length / 3) * 3, '0')
+  const groups: string[] = []
+
+  for (let i = 0; i < padded.length; i += 3) {
+    const chunk = parseInt(padded.slice(i, i + 3), 10)
+    if (chunk === 0) continue
+    const scaleIdx = (padded.length - i - 3) / 3
+    const chunkWords = convertHundreds(chunk)
+    const scale = SCALES[scaleIdx]
+    groups.push(chunkWords + (scale ? ' ' + scale : ''))
+  }
+
+  return groups.join(' ')
+}
 
 export const createPhonePracticeItems = (count: number, digitCount: number): PracticeItem[] =>
   Array.from({ length: count }, (_, index) => {
@@ -98,9 +152,18 @@ export const createNumberPracticeItems = (
     const fractionPart = fractionDigits > 0 ? randomDigitString(fractionDigits) : ''
     const numericValue = fractionDigits > 0 ? `${integerPart}.${fractionPart}` : integerPart
 
+    const integerWords = numberToEnglishWords(integerPart)
+    const fractionWords =
+      fractionPart
+        .split('')
+        .map((char) => DIGIT_WORDS[char] ?? char)
+        .join(' ')
+    const speakText =
+      fractionDigits > 0 ? `${integerWords} point ${fractionWords}` : integerWords
+
     return {
       id: `number-${index + 1}`,
-      speakText: numericToSpeechWords(numericValue),
+      speakText,
       answerText: numericValue,
     }
   })
