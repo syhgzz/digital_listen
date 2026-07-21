@@ -1,4 +1,6 @@
 import type { PracticeItem } from '../types/practice'
+import { dateToSpoken } from './dateToWords'
+import { numberToSpoken } from './numberToWords'
 
 const DIGIT_WORDS: Record<string, string> = {
   '0': 'zero',
@@ -44,17 +46,6 @@ const digitsToSpeechWords = (value: string): string =>
     .map((char) => DIGIT_WORDS[char] ?? char)
     .join(' ')
 
-const numericToSpeechWords = (value: string): string =>
-  value
-    .split('')
-    .map((char) => {
-      if (char === '.') {
-        return 'point'
-      }
-      return DIGIT_WORDS[char] ?? char
-    })
-    .join(' ')
-
 export const createPhonePracticeItems = (count: number, digitCount: number): PracticeItem[] =>
   Array.from({ length: count }, (_, index) => {
     const digits = randomDigitString(digitCount)
@@ -79,11 +70,12 @@ export const createDatePracticeItems = (
     const date = new Date(startDate)
     date.setDate(startDate.getDate() + offset)
 
-    const spoken = longDateFormatter.format(date)
+    const spoken = dateToSpoken(date)
+    const formatted = longDateFormatter.format(date)
     return {
       id: `date-${index + 1}`,
       speakText: spoken,
-      answerText: `${toLocalISODate(date)} (${spoken})`,
+      answerText: `${toLocalISODate(date)} (${formatted})`,
     }
   })
 }
@@ -100,7 +92,7 @@ export const createNumberPracticeItems = (
 
     return {
       id: `number-${index + 1}`,
-      speakText: numericToSpeechWords(numericValue),
+      speakText: numberToSpoken(numericValue),
       answerText: numericValue,
     }
   })

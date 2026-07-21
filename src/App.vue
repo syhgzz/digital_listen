@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { useTts } from './composables/useTts'
+import { usePiperTts } from './composables/usePiperTts'
 import type { ModuleSettings, PracticeItem, PracticeModule, SpeechRatePreset } from './types/practice'
 import {
   createDatePracticeItems,
@@ -20,7 +20,6 @@ interface PersistedSettings {
     integerDigits?: number
     fractionDigits?: number
   }
-  voiceURI?: string
   speechRatePreset?: SpeechRatePreset
   showAnswers?: boolean
 }
@@ -40,12 +39,6 @@ const speechRateLabels: Record<SpeechRatePreset, string> = {
   slightlyFast: '稍快',
   fastest: '最快',
 }
-const engineSourceLabels = {
-  os: '操作系统内部语音引擎',
-  local: '本地开源语音引擎',
-  online: '在线语音引擎',
-  none: '暂无可用语音引擎',
-} as const
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
@@ -57,8 +50,6 @@ const asBoolean = (value: unknown): boolean | null => (typeof value === 'boolean
 
 const asDateString = (value: unknown): string | null =>
   typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null
-
-const asString = (value: unknown): string | null => (typeof value === 'string' ? value : null)
 
 const asSpeechRatePreset = (value: unknown): SpeechRatePreset | null =>
   value === 'normal' || value === 'slightlyFast' || value === 'fastest' ? value : null
@@ -130,19 +121,14 @@ const showAnswers = ref(asBoolean(persistedSettings.showAnswers) ?? false)
 const moduleError = ref('')
 
 const {
-  activeEngineSource,
-  allVoiceOptions,
-  anyEngineConfigured,
-  selectedRatePreset,
-  selectedVoiceURI,
+  engineStatus,
+  loadProgress,
   speaking,
   ttsError,
+  selectedRatePreset,
   speak,
   stop,
-} = useTts({
-  langPrefix: 'en-US',
-  maxVoices: 5,
-  initialVoiceURI: asString(persistedSettings.voiceURI) ?? undefined,
+} = usePiperTts({
   initialRatePreset: asSpeechRatePreset(persistedSettings.speechRatePreset) ?? 'normal',
 })
 
@@ -151,6 +137,20 @@ const hasNextItem = computed(() => currentIndex.value < sessionItems.value.lengt
 const progressLabel = computed(() =>
   sessionItems.value.length > 0 ? `${currentIndex.value + 1} / ${sessionItems.value.length}` : '未开始',
 )
+const engineStatusLabel = computed(() => {
+  switch (engineStatus.value) {
+    case 'idle':
+      return '准备中'
+    case 'loading':
+      return `加载中 ${loadProgress.value}%`
+    case 'ready':
+      return '就绪'
+    case 'error':
+      return '错误'
+    default:
+      return '—'
+  }
+})
 
 const isInteractiveTarget = (target: EventTarget | null): boolean => {
   if (!(target instanceof HTMLElement)) {
@@ -159,11 +159,7 @@ const isInteractiveTarget = (target: EventTarget | null): boolean => {
 
   return (
     target.isContentEditable ||
-    Boolean(
-      target.closest(
-        'input, textarea, select, button, a, summary, details, [role="button"], [role="link"]',
-      ),
-    )
+    Boolean(target.closest('input, textarea, select, [contenteditable]'))
   )
 }
 
@@ -334,7 +330,6 @@ watch(
     () => settings.number.integerDigits,
     () => settings.number.fractionDigits,
     () => selectedRatePreset.value,
-    () => selectedVoiceURI.value,
     () => showAnswers.value,
   ],
   () => {
@@ -351,7 +346,6 @@ watch(
       },
       speechRatePreset: selectedRatePreset.value,
       showAnswers: showAnswers.value,
-      voiceURI: selectedVoiceURI.value,
     }
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(payload))
   },
@@ -371,7 +365,6 @@ onUnmounted(() => {
   <main class="app">
     <header class="hero">
       <h1>数字听力训练</h1>
-      <p>基于 Vue 的数字听写练习工具：每个模块随机生成 30 题并自动朗读。</p>
     </header>
 
     <section class="panel">
@@ -389,97 +382,91 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <div class="settings-grid">
-        <label class="field">
-          <span>语音引擎</span>
-          <select v-model="selectedVoiceURI" :disabled="allVoiceOptions.length === 0">
-            <option value="" disabled>
-              {{ allVoiceOptions.length > 0 ? '请选择语音' : '暂无可用语音引擎' }}
-            </option>
-            <option
-              v-for="opt in allVoiceOptions"
-              :key="opt.id"
-              :value="opt.id"
-            >
-              {{ opt.name }}（{{ opt.sourceLabel }}）
-            </option>
-          </select>
-        </label>
+      <div class="settings">
+        <fieldset class="settings-group">
+          <legend>模块参数</legend>
+          <div class="settings-grid">
+            <template v-if="activeModule === 'phone'">
+              <label class="field">
+                <span>电话号码位数</span>
+                <input v-model.number="settings.phone.digitCount" type="number" min="3" max="20" />
+              </label>
+            </template>
 
-        <label class="field">
-          <span>语速</span>
-          <select v-model="selectedRatePreset">
-            <option v-for="preset in speechRatePresets" :key="preset" :value="preset">
-              {{ speechRateLabels[preset] }}
-            </option>
-          </select>
-        </label>
+            <template v-else-if="activeModule === 'date'">
+              <label class="field">
+                <span>开始日期</span>
+                <input v-model="settings.date.startDate" type="date" />
+              </label>
+              <label class="field">
+                <span>结束日期</span>
+                <input v-model="settings.date.endDate" type="date" />
+              </label>
+            </template>
 
-        <div class="field">
-          <span>显示答案</span>
-          <label class="switch-field">
-            <input v-model="showAnswers" class="switch-input" type="checkbox" />
-            <span class="switch-track" aria-hidden="true"></span>
-            <span class="switch-text">{{ showAnswers ? '已开启' : '已关闭' }}</span>
-          </label>
-        </div>
+            <template v-else>
+              <label class="field">
+                <span>小数点前位数</span>
+                <input
+                  v-model.number="settings.number.integerDigits"
+                  type="number"
+                  min="1"
+                  max="12"
+                />
+              </label>
+              <label class="field">
+                <span>小数点后位数</span>
+                <input
+                  v-model.number="settings.number.fractionDigits"
+                  type="number"
+                  min="0"
+                  max="8"
+                />
+              </label>
+            </template>
+          </div>
+        </fieldset>
 
-        <template v-if="activeModule === 'phone'">
-          <label class="field">
-            <span>电话号码位数</span>
-            <input v-model.number="settings.phone.digitCount" type="number" min="3" max="20" />
-          </label>
-        </template>
+        <fieldset class="settings-group">
+          <legend>语音与显示</legend>
+          <div class="settings-grid">
+            <label class="field">
+              <span>语速</span>
+              <select v-model="selectedRatePreset">
+                <option v-for="preset in speechRatePresets" :key="preset" :value="preset">
+                  {{ speechRateLabels[preset] }}
+                </option>
+              </select>
+            </label>
 
-        <template v-else-if="activeModule === 'date'">
-          <label class="field">
-            <span>开始日期</span>
-            <input v-model="settings.date.startDate" type="date" />
-          </label>
-          <label class="field">
-            <span>结束日期</span>
-            <input v-model="settings.date.endDate" type="date" />
-          </label>
-        </template>
+            <div class="field">
+              <span>显示答案</span>
+              <label class="switch-field">
+                <input v-model="showAnswers" class="switch-input" type="checkbox" />
+                <span class="switch-track" aria-hidden="true"></span>
+                <span class="switch-text">{{ showAnswers ? '已开启' : '已关闭' }}</span>
+              </label>
+            </div>
 
-        <template v-else>
-          <label class="field">
-            <span>小数点前位数</span>
-            <input
-              v-model.number="settings.number.integerDigits"
-              type="number"
-              min="1"
-              max="12"
-            />
-          </label>
-          <label class="field">
-            <span>小数点后位数</span>
-            <input
-              v-model.number="settings.number.fractionDigits"
-              type="number"
-              min="0"
-              max="8"
-            />
-          </label>
-        </template>
+            <div class="field">
+              <span>语音引擎</span>
+              <span class="engine-chip" :data-status="engineStatus">{{ engineStatusLabel }}</span>
+            </div>
+          </div>
+        </fieldset>
       </div>
 
-      <p v-if="!anyEngineConfigured" class="error-text">当前没有可用语音引擎，请先配置本地或在线引擎。</p>
       <p v-if="moduleError" class="error-text">{{ moduleError }}</p>
       <p v-if="ttsError" class="error-text">{{ ttsError }}</p>
 
       <div class="actions">
         <button type="button" class="primary" @click="restartSession">重新开始（R）</button>
-        <button type="button" :disabled="!currentItem || !anyEngineConfigured" @click="repeatCurrent">
-          重复发音（空格）
-        </button>
+        <button type="button" :disabled="!currentItem" @click="repeatCurrent">重复发音（空格）</button>
         <button type="button" :disabled="!hasNextItem" @click="nextItem">下一个（→）</button>
       </div>
 
       <div class="status">
-        <span>当前模块：{{ moduleLabels[activeModule] }}</span>
         <span>进度：{{ progressLabel }}</span>
-        <span>引擎：{{ engineSourceLabels[activeEngineSource] }}</span>
         <span v-if="speaking">状态：朗读中...</span>
         <span v-if="currentItem">快捷键：空格重复，右箭头下一题，R 重新开始</span>
       </div>

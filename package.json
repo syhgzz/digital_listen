@@ -6,9 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "sync-piper": "node scripts/sync-piper-assets.mjs",
+    "postinstall": "node scripts/sync-piper-assets.mjs --skip-model"
   },
   "dependencies": {
+    "piper-wasm": "^0.1.4",
     "vue": "^3.5.32"
   },
   "devDependencies": {

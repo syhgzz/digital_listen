@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 
+# Piper TTS 运行时资源（由 scripts/sync-piper-assets.mjs 重新生成）
+public/piper/
+
+# Playwright CLI 临时产物
+.playwright-cli/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
