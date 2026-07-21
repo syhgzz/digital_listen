@@ -16,6 +16,10 @@ npm run preview # preview production build
 
 > No test framework is installed. There are no test commands.
 
+## Deployment
+
+- `deploy.sh` — one-shot server deploy (npm ci → setup:models → build → sync to `/var/www/digital-listen-k3` → install nginx config → reload). Renders `nginx/k3.conf` (listens on **53001**, serves at root path). Refuses to touch pre-existing directories/configs that lack its ownership markers.
+
 ## Architecture
 
 - **Single-page app** — no router, no state management library (Pinia/Vuex). Module switching uses `v-if`/`v-show` in `App.vue`.

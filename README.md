@@ -38,4 +38,19 @@ npm run dev
 ```bash
 npm run build
 ```
+
+## 部署到服务器(nginx)
+
+在服务器上克隆代码后,在仓库根目录执行一键部署:
+
+```bash
+bash deploy.sh
+```
+
+脚本会依次完成:`npm ci` → 下载语音模型 → 构建 → 同步到 `/var/www/digital-listen-k3` →
+安装 `nginx/k3.conf` 到 `/etc/nginx/conf.d/k3.conf` 并重载 nginx。
+部署后通过 `http://<服务器IP>:53001/` 访问(云服务器需放行 53001 端口)。
+
+安全约定:脚本**不会修改服务器上已有的文件**——目标目录或 nginx 配置已存在且不属于本应用时会直接中止。
+可用 `DEPLOY_DIR` / `NGINX_CONF_DIR` / `NGINX_CONF_NAME` 环境变量自定义路径。
 # digital_listen
