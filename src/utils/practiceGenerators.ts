@@ -44,16 +44,105 @@ const digitsToSpeechWords = (value: string): string =>
     .map((char) => DIGIT_WORDS[char] ?? char)
     .join(' ')
 
-const numericToSpeechWords = (value: string): string =>
-  value
-    .split('')
-    .map((char) => {
-      if (char === '.') {
-        return 'point'
+const ONES = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
+const TEENS = [
+  'ten',
+  'eleven',
+  'twelve',
+  'thirteen',
+  'fourteen',
+  'fifteen',
+  'sixteen',
+  'seventeen',
+  'eighteen',
+  'nineteen',
+]
+const TENS = [
+  '',
+  '',
+  'twenty',
+  'thirty',
+  'forty',
+  'fifty',
+  'sixty',
+  'seventy',
+  'eighty',
+  'ninety',
+]
+const SCALES = ['', 'thousand', 'million', 'billion']
+
+const convertHundreds = (n: number): string => {
+  const parts: string[] = []
+
+  if (n >= 100) {
+    const hundreds = Math.floor(n / 100)
+    parts.push(`${ONES[hundreds]} hundred`)
+    n %= 100
+  }
+
+  if (n >= 20) {
+    const tens = Math.floor(n / 10)
+    const ones = n % 10
+    parts.push(ones > 0 ? `${TENS[tens]}-${ONES[ones]}` : TENS[tens])
+  } else if (n >= 10) {
+    parts.push(TEENS[n - 10])
+  } else if (n > 0) {
+    parts.push(ONES[n])
+  }
+
+  return parts.join(' ')
+}
+
+const integerToWords = (numStr: string): string => {
+  if (numStr === '0') {
+    return 'zero'
+  }
+
+  // Remove leading zeros except for single zero
+  const trimmed = numStr.replace(/^0+/, '') || '0'
+  if (trimmed === '0') {
+    return 'zero'
+  }
+
+  const groups: string[] = []
+  let remaining = trimmed
+
+  while (remaining.length > 0) {
+    const start = Math.max(0, remaining.length - 3)
+    groups.push(remaining.slice(start))
+    remaining = remaining.slice(0, start)
+  }
+
+  return groups
+    .map((group, index) => {
+      const n = parseInt(group, 10)
+      if (n === 0) {
+        return ''
       }
-      return DIGIT_WORDS[char] ?? char
+      const words = convertHundreds(n)
+      const scale = SCALES[index]
+      return scale ? `${words} ${scale}` : words
     })
+    .filter(Boolean)
+    .reverse()
     .join(' ')
+}
+
+const numberToEnglishWords = (value: string): string => {
+  const parts = value.split('.')
+  const integerPart = integerToWords(parts[0])
+
+  if (parts.length === 1 || parts[1] === '') {
+    return integerPart
+  }
+
+  const fractionWords = parts[1]
+    .split('')
+    .map((d) => DIGIT_WORDS[d] ?? d)
+    .join(' ')
+
+  return `${integerPart} point ${fractionWords}`
+}
 
 export const createPhonePracticeItems = (count: number, digitCount: number): PracticeItem[] =>
   Array.from({ length: count }, (_, index) => {
@@ -100,7 +189,7 @@ export const createNumberPracticeItems = (
 
     return {
       id: `number-${index + 1}`,
-      speakText: numericToSpeechWords(numericValue),
+      speakText: numberToEnglishWords(numericValue),
       answerText: numericValue,
     }
   })
