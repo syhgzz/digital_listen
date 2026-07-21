@@ -1,4 +1,5 @@
 import type { PracticeItem } from '../types/practice'
+import { integerToEnglishWords } from './numberToWords'
 
 const DIGIT_WORDS: Record<string, string> = {
   '0': 'zero',
@@ -44,17 +45,6 @@ const digitsToSpeechWords = (value: string): string =>
     .map((char) => DIGIT_WORDS[char] ?? char)
     .join(' ')
 
-const numericToSpeechWords = (value: string): string =>
-  value
-    .split('')
-    .map((char) => {
-      if (char === '.') {
-        return 'point'
-      }
-      return DIGIT_WORDS[char] ?? char
-    })
-    .join(' ')
-
 export const createPhonePracticeItems = (count: number, digitCount: number): PracticeItem[] =>
   Array.from({ length: count }, (_, index) => {
     const digits = randomDigitString(digitCount)
@@ -98,9 +88,15 @@ export const createNumberPracticeItems = (
     const fractionPart = fractionDigits > 0 ? randomDigitString(fractionDigits) : ''
     const numericValue = fractionDigits > 0 ? `${integerPart}.${fractionPart}` : integerPart
 
+    const integerWords = integerToEnglishWords(integerPart)
+    const speakText =
+      fractionDigits > 0
+        ? `${integerWords} point ${digitsToSpeechWords(fractionPart)}`
+        : integerWords
+
     return {
       id: `number-${index + 1}`,
-      speakText: numericToSpeechWords(numericValue),
+      speakText,
       answerText: numericValue,
     }
   })

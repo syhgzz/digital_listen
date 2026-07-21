@@ -38,13 +38,8 @@ body {
 }
 
 .hero h1 {
-  margin: 0 0 6px;
-  font-size: clamp(28px, 4vw, 38px);
-}
-
-.hero p {
   margin: 0;
-  color: #486581;
+  font-size: clamp(28px, 4vw, 38px);
 }
 
 .panel {
@@ -53,6 +48,17 @@ body {
   border-radius: 16px;
   padding: 18px;
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+}
+
+.panel + .panel {
+  margin-top: 14px;
+}
+
+.panel-title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #334e68;
 }
 
 .tabs {
@@ -178,8 +184,9 @@ body {
 .actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
-  margin: 16px 0 12px;
+  margin-bottom: 4px;
 }
 
 .actions button {
@@ -203,12 +210,37 @@ body {
   cursor: not-allowed;
 }
 
-.status {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 18px;
+.progress-label {
   color: #486581;
   font-size: 14px;
+  margin-left: auto;
+}
+
+.progress-label + .progress-label {
+  margin-left: 0;
+}
+
+.engine-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  color: #486581;
+  font-size: 14px;
+}
+
+.progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: #e4ebf5;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: #1565d8;
+  transition: width 0.2s ease;
 }
 
 .question-card {
@@ -219,8 +251,17 @@ body {
   background: #f8fbff;
 }
 
+.question-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
 .question-card .title {
-  margin: 0 0 10px;
+  margin: 0;
   font-weight: 600;
   color: #102a43;
 }

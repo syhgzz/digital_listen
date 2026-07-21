@@ -40,12 +40,6 @@ const speechRateLabels: Record<SpeechRatePreset, string> = {
   slightlyFast: '稍快',
   fastest: '最快',
 }
-const engineSourceLabels = {
-  os: '操作系统内部语音引擎',
-  local: '本地开源语音引擎',
-  online: '在线语音引擎',
-  none: '暂无可用语音引擎',
-} as const
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
@@ -130,18 +124,16 @@ const showAnswers = ref(asBoolean(persistedSettings.showAnswers) ?? false)
 const moduleError = ref('')
 
 const {
-  activeEngineSource,
-  allVoiceOptions,
-  anyEngineConfigured,
+  downloadProgress,
+  preparing,
   selectedRatePreset,
   selectedVoiceURI,
   speaking,
   ttsError,
+  voiceOptions,
   speak,
   stop,
 } = useTts({
-  langPrefix: 'en-US',
-  maxVoices: 5,
   initialVoiceURI: asString(persistedSettings.voiceURI) ?? undefined,
   initialRatePreset: asSpeechRatePreset(persistedSettings.speechRatePreset) ?? 'normal',
 })
@@ -159,12 +151,12 @@ const isInteractiveTarget = (target: EventTarget | null): boolean => {
 
   return (
     target.isContentEditable ||
-    Boolean(
-      target.closest(
-        'input, textarea, select, button, a, summary, details, [role="button"], [role="link"]',
-      ),
-    )
+    Boolean(target.closest('input, textarea, select, [contenteditable]'))
   )
+}
+
+const blurTarget = (event: MouseEvent) => {
+  ;(event.currentTarget as HTMLElement | null)?.blur()
 }
 
 const validatePhoneModule = (): string => {
@@ -371,59 +363,27 @@ onUnmounted(() => {
   <main class="app">
     <header class="hero">
       <h1>数字听力训练</h1>
-      <p>基于 Vue 的数字听写练习工具：每个模块随机生成 30 题并自动朗读。</p>
     </header>
 
+    <div class="tabs" role="tablist" aria-label="训练模块">
+      <button
+        v-for="module in modules"
+        :key="module"
+        :class="['tab-button', { active: activeModule === module }]"
+        type="button"
+        role="tab"
+        :aria-selected="activeModule === module"
+        @click="
+          blurTarget($event); switchModule(module)
+        "
+      >
+        {{ moduleLabels[module] }}
+      </button>
+    </div>
+
     <section class="panel">
-      <div class="tabs" role="tablist" aria-label="训练模块">
-        <button
-          v-for="module in modules"
-          :key="module"
-          :class="['tab-button', { active: activeModule === module }]"
-          type="button"
-          role="tab"
-          :aria-selected="activeModule === module"
-          @click="switchModule(module)"
-        >
-          {{ moduleLabels[module] }}
-        </button>
-      </div>
-
+      <h2 class="panel-title">练习设置</h2>
       <div class="settings-grid">
-        <label class="field">
-          <span>语音引擎</span>
-          <select v-model="selectedVoiceURI" :disabled="allVoiceOptions.length === 0">
-            <option value="" disabled>
-              {{ allVoiceOptions.length > 0 ? '请选择语音' : '暂无可用语音引擎' }}
-            </option>
-            <option
-              v-for="opt in allVoiceOptions"
-              :key="opt.id"
-              :value="opt.id"
-            >
-              {{ opt.name }}（{{ opt.sourceLabel }}）
-            </option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span>语速</span>
-          <select v-model="selectedRatePreset">
-            <option v-for="preset in speechRatePresets" :key="preset" :value="preset">
-              {{ speechRateLabels[preset] }}
-            </option>
-          </select>
-        </label>
-
-        <div class="field">
-          <span>显示答案</span>
-          <label class="switch-field">
-            <input v-model="showAnswers" class="switch-input" type="checkbox" />
-            <span class="switch-track" aria-hidden="true"></span>
-            <span class="switch-text">{{ showAnswers ? '已开启' : '已关闭' }}</span>
-          </label>
-        </div>
-
         <template v-if="activeModule === 'phone'">
           <label class="field">
             <span>电话号码位数</span>
@@ -463,31 +423,88 @@ onUnmounted(() => {
           </label>
         </template>
       </div>
-
-      <p v-if="!anyEngineConfigured" class="error-text">当前没有可用语音引擎，请先配置本地或在线引擎。</p>
       <p v-if="moduleError" class="error-text">{{ moduleError }}</p>
-      <p v-if="ttsError" class="error-text">{{ ttsError }}</p>
+    </section>
 
-      <div class="actions">
-        <button type="button" class="primary" @click="restartSession">重新开始（R）</button>
-        <button type="button" :disabled="!currentItem || !anyEngineConfigured" @click="repeatCurrent">
-          重复发音（空格）
-        </button>
-        <button type="button" :disabled="!hasNextItem" @click="nextItem">下一个（→）</button>
+    <section class="panel">
+      <h2 class="panel-title">语音设置</h2>
+      <div class="settings-grid">
+        <label class="field">
+          <span>声线</span>
+          <select v-model="selectedVoiceURI">
+            <option v-for="opt in voiceOptions" :key="opt.id" :value="opt.id">
+              {{ opt.name }}
+            </option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>语速</span>
+          <select v-model="selectedRatePreset">
+            <option v-for="preset in speechRatePresets" :key="preset" :value="preset">
+              {{ speechRateLabels[preset] }}
+            </option>
+          </select>
+        </label>
       </div>
 
-      <div class="status">
-        <span>当前模块：{{ moduleLabels[activeModule] }}</span>
-        <span>进度：{{ progressLabel }}</span>
-        <span>引擎：{{ engineSourceLabels[activeEngineSource] }}</span>
-        <span v-if="speaking">状态：朗读中...</span>
-        <span v-if="currentItem">快捷键：空格重复，右箭头下一题，R 重新开始</span>
+      <div v-if="preparing" class="engine-status">
+        <span v-if="downloadProgress !== null">
+          语音模型下载中 {{ downloadProgress }}%（仅首次需要，之后可离线使用）
+        </span>
+        <span v-else>语音引擎准备中...</span>
+        <div class="progress-track" aria-hidden="true">
+          <div class="progress-fill" :style="{ width: `${downloadProgress ?? 5}%` }"></div>
+        </div>
+      </div>
+      <p v-if="ttsError" class="error-text">{{ ttsError }}</p>
+    </section>
+
+    <section class="panel">
+      <div class="actions">
+        <button
+          type="button"
+          class="primary"
+          :disabled="preparing"
+          @click="
+            blurTarget($event); restartSession()
+          "
+        >
+          重新开始（R）
+        </button>
+        <button
+          type="button"
+          :disabled="!currentItem || preparing"
+          @click="
+            blurTarget($event); repeatCurrent()
+          "
+        >
+          重复发音（空格）
+        </button>
+        <button
+          type="button"
+          :disabled="!hasNextItem || preparing"
+          @click="
+            blurTarget($event); nextItem()
+          "
+        >
+          下一个（→）
+        </button>
+        <span class="progress-label">进度：{{ progressLabel }}</span>
+        <span v-if="speaking" class="progress-label">朗读中...</span>
       </div>
 
       <div v-if="currentItem" class="question-card">
-        <p class="title">请听并写下你听到的内容</p>
+        <div class="question-header">
+          <p class="title">请听并写下你听到的内容</p>
+          <label class="switch-field">
+            <input v-model="showAnswers" class="switch-input" type="checkbox" />
+            <span class="switch-track" aria-hidden="true"></span>
+            <span class="switch-text">{{ showAnswers ? '显示答案' : '隐藏答案' }}</span>
+          </label>
+        </div>
         <p v-if="showAnswers" class="answer">{{ currentItem.answerText }}</p>
-        <p v-else class="masked">答案当前隐藏，可打开“显示答案”开关查看。</p>
+        <p v-else class="masked">答案当前隐藏。</p>
       </div>
       <div v-else class="question-card empty">启动时会自动准备题目并朗读第一题。</div>
     </section>

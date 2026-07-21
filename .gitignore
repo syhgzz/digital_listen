@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Piper voice models (downloaded by scripts/download-models.sh)
+public/models/
+
+# WASM runtime files (copied by scripts/copy-wasm.mjs on postinstall)
+public/wasm/
+
+# Playwright CLI test artifacts
+.playwright-cli/
