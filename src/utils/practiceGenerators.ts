@@ -1,5 +1,5 @@
 import type { PracticeItem } from '../types/practice'
-import { integerToEnglishWords } from './numberToWords'
+import { integerToEnglishWords, yearToEnglishWords } from './numberToWords'
 
 const DIGIT_WORDS: Record<string, string> = {
   '0': 'zero',
@@ -18,6 +18,10 @@ const longDateFormatter = new Intl.DateTimeFormat('en-US', {
   month: 'long',
   day: 'numeric',
   year: 'numeric',
+})
+
+const monthFormatter = new Intl.DateTimeFormat('en-US', {
+  month: 'long',
 })
 
 const randomInt = (min: number, max: number): number =>
@@ -70,9 +74,11 @@ export const createDatePracticeItems = (
     date.setDate(startDate.getDate() + offset)
 
     const spoken = longDateFormatter.format(date)
+    const monthName = monthFormatter.format(date)
+    const spokenWithYear = `${monthName} ${date.getDate()}, ${yearToEnglishWords(date.getFullYear())}`
     return {
       id: `date-${index + 1}`,
-      speakText: spoken,
+      speakText: spokenWithYear,
       answerText: `${toLocalISODate(date)} (${spoken})`,
     }
   })

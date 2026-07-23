@@ -79,3 +79,40 @@ export const integerToEnglishWords = (digits: string): string => {
 
   return parts.join(' ')
 }
+
+const belowHundredToWords = (value: number): string => {
+  if (value >= 20) {
+    const tens = Math.floor(value / 10)
+    const ones = value % 10
+    return ones > 0 ? `${TENS[tens]}-${BELOW_TWENTY[ones]}` : TENS[tens]
+  }
+  return BELOW_TWENTY[value]
+}
+
+/**
+ * Convert a 4-digit year into the English year-reading convention:
+ * 2026 -> "twenty twenty-six", 2008 -> "two thousand eight",
+ * 1999 -> "nineteen ninety-nine", 1900 -> "nineteen hundred",
+ * 1905 -> "nineteen oh five".
+ */
+export const yearToEnglishWords = (year: number): string => {
+  if (year === 2000) {
+    return 'two thousand'
+  }
+  if (year > 2000 && year < 2010) {
+    return `two thousand ${BELOW_TWENTY[year - 2000]}`
+  }
+  if (year >= 2010 && year < 2100) {
+    return `twenty ${belowHundredToWords(year - 2000)}`
+  }
+
+  const firstTwo = Math.floor(year / 100)
+  const lastTwo = year % 100
+  if (lastTwo === 0) {
+    return `${belowHundredToWords(firstTwo)} hundred`
+  }
+  if (lastTwo < 10) {
+    return `${belowHundredToWords(firstTwo)} oh ${BELOW_TWENTY[lastTwo]}`
+  }
+  return `${belowHundredToWords(firstTwo)} ${belowHundredToWords(lastTwo)}`
+}
