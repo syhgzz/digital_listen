@@ -49,6 +49,22 @@ const digitsToSpeechWords = (value: string): string =>
     .map((char) => DIGIT_WORDS[char] ?? char)
     .join(' ')
 
+const ordinalSuffix = (day: number): string => {
+  if (day >= 11 && day <= 13) {
+    return 'th'
+  }
+  switch (day % 10) {
+    case 1:
+      return 'st'
+    case 2:
+      return 'nd'
+    case 3:
+      return 'rd'
+    default:
+      return 'th'
+  }
+}
+
 export const createPhonePracticeItems = (count: number, digitCount: number): PracticeItem[] =>
   Array.from({ length: count }, (_, index) => {
     const digits = randomDigitString(digitCount)
@@ -75,7 +91,8 @@ export const createDatePracticeItems = (
 
     const spoken = longDateFormatter.format(date)
     const monthName = monthFormatter.format(date)
-    const spokenWithYear = `${monthName} ${date.getDate()}, ${yearToEnglishWords(date.getFullYear())}`
+    const day = date.getDate()
+    const spokenWithYear = `${monthName} ${day}${ordinalSuffix(day)}, ${yearToEnglishWords(date.getFullYear())}`
     return {
       id: `date-${index + 1}`,
       speakText: spokenWithYear,
@@ -97,7 +114,7 @@ export const createNumberPracticeItems = (
     const integerWords = integerToEnglishWords(integerPart)
     const speakText =
       fractionDigits > 0
-        ? `${integerWords} point ${digitsToSpeechWords(fractionPart)}`
+        ? `${integerWords}, point, ${digitsToSpeechWords(fractionPart)}`
         : integerWords
 
     return {

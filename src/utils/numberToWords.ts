@@ -51,8 +51,10 @@ const chunkToWords = (value: number): string => {
 
 /**
  * Convert an integer digit string (e.g. "1234567890") into English words
- * ("one billion two hundred thirty-four million ...").
- * Supports up to 999,999,999,999.
+ * ("one billion, two hundred thirty-four million, ...").
+ * Scale groups are joined with ", " so the TTS pauses at billion/million/
+ * thousand boundaries — long numbers are synthesized more reliably and are
+ * easier to transcribe. Supports up to 999,999,999,999.
  */
 export const integerToEnglishWords = (digits: string): string => {
   const value = Number(digits.replace(/^0+(?=\d)/, ''))
@@ -77,7 +79,7 @@ export const integerToEnglishWords = (digits: string): string => {
     parts.push(chunkToWords(remainder))
   }
 
-  return parts.join(' ')
+  return parts.join(', ')
 }
 
 const belowHundredToWords = (value: number): string => {
