@@ -1,5 +1,6 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { SpeechRatePreset } from '../types/practice'
+import { useKokoroTts } from './useKokoroTts'
 
 interface HttpTtsEngineOptions {
   enabled?: boolean
@@ -16,7 +17,7 @@ interface UseTtsOptions {
   onlineEngine?: HttpTtsEngineOptions
 }
 
-export type TtsEngineSource = 'os' | 'local' | 'online' | 'none'
+export type TtsEngineSource = 'kokoro' | 'os' | 'local' | 'online' | 'none'
 
 export const SYSTEM_DEFAULT_VOICE_ID = '__system_default__'
 export const LOCAL_ENGINE_ID = '__local_engine__'
@@ -76,6 +77,21 @@ export const useTts = (options: UseTtsOptions = {}) => {
   const requestController = ref<AbortController | null>(null)
   let speakGeneration = 0
 
+  // Kokoro unified engine
+  const {
+    availableVoices: kokoroVoices,
+    engineState: kokoroState,
+    generating: kokoroGenerating,
+    errorMessage: kokoroError,
+    progressMessage: kokoroProgressMsg,
+    progressPercent: kokoroProgressPct,
+    isSupported: kokoroIsSupported,
+    init: kokoroInit,
+    speak: kokoroSpeak,
+    stop: kokoroStop,
+    setSpeed: kokoroSetSpeed,
+  } = useKokoroTts()
+
   const localEngine = normalizeHttpEngineOptions(
     options.localEngine,
     import.meta.env.VITE_LOCAL_TTS_ENABLED,
@@ -90,7 +106,7 @@ export const useTts = (options: UseTtsOptions = {}) => {
   const voicePrefix = (options.langPrefix ?? 'en-US').toLowerCase()
   const maxVoices = options.maxVoices ?? 5
   const anyEngineConfigured = computed(
-    () => osSupported || localEngine.enabled || onlineEngine.enabled,
+    () => kokoroIsSupported() || osSupported || localEngine.enabled || onlineEngine.enabled,
   )
 
   const availableVoices = computed(() =>
@@ -108,21 +124,36 @@ export const useTts = (options: UseTtsOptions = {}) => {
 
   const allVoiceOptions = computed<VoiceOption[]>(() => {
     const sourceLabel = (source: TtsEngineSource) => {
+      if (source === 'kokoro') return '统一引擎'
       if (source === 'os') return '操作系统'
       if (source === 'local') return '本地开源'
       return '在线'
     }
     const options: VoiceOption[] = []
 
+    // Kokoro unified engine voices (highest priority)
+    if (kokoroIsSupported()) {
+      for (const kv of kokoroVoices) {
+        options.push({
+          id: `kokoro:${kv.id}`,
+          name: kv.name,
+          lang: kv.language,
+          source: 'kokoro',
+          sourceLabel: sourceLabel('kokoro'),
+        })
+      }
+    }
+
+    // OS voices as fallback
     if (osSupported) {
       const defaultVoice = allVoices.value.find((v) => v.default)
-      const defaultName = defaultVoice ? `系统默认语音（${defaultVoice.name}）` : '系统默认语音'
+      const defaultName = defaultVoice ? `系统默认（${defaultVoice.name}）` : '系统默认语音'
       options.push({
         id: SYSTEM_DEFAULT_VOICE_ID,
         name: defaultName,
         lang: defaultVoice?.lang ?? '—',
         source: 'os',
-        sourceLabel: '系统默认',
+        sourceLabel: '操作系统',
       })
 
       const allowedPrefixes = ['en-us', 'en-gb', 'zh-cn']
@@ -148,6 +179,7 @@ export const useTts = (options: UseTtsOptions = {}) => {
       }
     }
 
+    // HTTP engines (local / online)
     if (localEngine.enabled) {
       options.push({
         id: LOCAL_ENGINE_ID,
@@ -178,6 +210,7 @@ export const useTts = (options: UseTtsOptions = {}) => {
     allVoices.value = window.speechSynthesis.getVoices()
   }
 
+  // Auto-select first available voice
   watch(
     allVoiceOptions,
     (options) => {
@@ -185,20 +218,29 @@ export const useTts = (options: UseTtsOptions = {}) => {
         return
       }
 
-      if (selectedVoiceURI.value === SYSTEM_DEFAULT_VOICE_ID) {
+      if (selectedVoiceURI.value && options.some((opt) => opt.id === selectedVoiceURI.value)) {
         return
       }
-      const isCurrentStillAvailable = options.some((opt) => opt.id === selectedVoiceURI.value)
-      if (!isCurrentStillAvailable) {
-        selectedVoiceURI.value = options[0].id
-      }
+
+      // Prefer kokoro voices first
+      const firstKokoro = options.find((opt) => opt.source === 'kokoro')
+      selectedVoiceURI.value = firstKokoro?.id ?? options[0].id
     },
     { immediate: true },
   )
 
+  // Watch kokoro state for model loading UI
+  const engineLoading = computed(() => kokoroState.value === 'loading')
+  const engineProgress = computed(() => ({
+    message: kokoroProgressMsg.value,
+    percent: kokoroProgressPct.value,
+  }))
+
   const stop = () => {
     requestController.value?.abort()
     requestController.value = null
+
+    kokoroStop()
 
     if (osSupported) {
       window.speechSynthesis.cancel()
@@ -208,9 +250,8 @@ export const useTts = (options: UseTtsOptions = {}) => {
   }
 
   const ensureVoicesReady = async () => {
-    if (selectedVoiceURI.value !== SYSTEM_DEFAULT_VOICE_ID) return
-    if (allVoices.value.length > 0) return
     if (!osSupported) return
+    if (allVoices.value.length > 0) return
     updateVoiceList()
     if (allVoices.value.length > 0) return
     await new Promise<void>((resolve) => {
@@ -235,9 +276,7 @@ export const useTts = (options: UseTtsOptions = {}) => {
       const utterance = new SpeechSynthesisUtterance(text)
       utterance.lang = 'en-US'
 
-      const targetUri = selectedVoiceURI.value === SYSTEM_DEFAULT_VOICE_ID
-        ? allVoices.value.find((v) => v.default)?.voiceURI ?? ''
-        : selectedVoiceURI.value
+      const targetUri = selectedVoiceURI.value
       const selectedVoice = allVoices.value.find((v) => v.voiceURI === targetUri)
       if (selectedVoice) {
         utterance.voice = selectedVoice
@@ -262,6 +301,21 @@ export const useTts = (options: UseTtsOptions = {}) => {
 
       window.speechSynthesis.speak(utterance)
     })
+  }
+
+  const speakWithKokoroEngine = async (text: string) => {
+    // Ensure kokoro is initialized
+    if (kokoroState.value === 'uninitialized') {
+      await kokoroInit()
+    }
+
+    if (kokoroState.value !== 'ready') {
+      throw new Error(kokoroError.value || '统一语音引擎未就绪。')
+    }
+
+    const voiceId = selectedVoiceURI.value.replace('kokoro:', '')
+    kokoroSetSpeed(selectedRatePreset.value)
+    await kokoroSpeak(text, voiceId, selectedRatePreset.value)
   }
 
   const speakWithHttpEngine = async (
@@ -332,7 +386,11 @@ export const useTts = (options: UseTtsOptions = {}) => {
         throw new Error('未选择语音引擎。')
       }
 
-      if (selectedOption.source === 'os') {
+      speaking.value = true
+
+      if (selectedOption.source === 'kokoro') {
+        await speakWithKokoroEngine(trimmedText)
+      } else if (selectedOption.source === 'os') {
         await speakWithOsEngine(trimmedText)
       } else if (selectedOption.source === 'local') {
         await speakWithHttpEngine('local', localEngine, trimmedText)
@@ -345,15 +403,25 @@ export const useTts = (options: UseTtsOptions = {}) => {
       if (gen !== speakGeneration) return
       activeEngineSource.value = 'none'
       ttsError.value = error instanceof Error ? error.message : '语音播放失败。'
+    } finally {
+      if (gen === speakGeneration) {
+        speaking.value = false
+      }
     }
   }
 
-  onMounted(() => {
-    if (!osSupported) {
-      return
+  // Sync kokoro generating state with speaking
+  watch(kokoroGenerating, (val) => {
+    if (val) {
+      speaking.value = true
     }
-    updateVoiceList()
-    window.speechSynthesis.addEventListener('voiceschanged', updateVoiceList)
+  })
+
+  onMounted(() => {
+    if (osSupported) {
+      updateVoiceList()
+      window.speechSynthesis.addEventListener('voiceschanged', updateVoiceList)
+    }
   })
 
   onUnmounted(() => {
@@ -368,6 +436,8 @@ export const useTts = (options: UseTtsOptions = {}) => {
     allVoiceOptions,
     anyEngineConfigured,
     availableVoices,
+    engineLoading,
+    engineProgress,
     selectedRatePreset,
     selectedVoiceURI,
     speaking,
