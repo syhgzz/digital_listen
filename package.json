@@ -4,11 +4,15 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/fix-mespeak-encoding.mjs && node scripts/copy-piper-assets.mjs",
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "models": "node scripts/download-tts-model.mjs"
   },
   "dependencies": {
+    "mespeak": "^2.0.2",
+    "piper-tts-web": "^1.1.2",
     "vue": "^3.5.32"
   },
   "devDependencies": {

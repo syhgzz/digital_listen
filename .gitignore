@@ -12,6 +12,15 @@ dist
 dist-ssr
 *.local
 
+# TTS 语音模型（用 npm run models 下载）
+public/models
+public/onnx
+public/piper
+public/worker
+
+# playwright-cli 生成的日志
+.playwright-cli
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

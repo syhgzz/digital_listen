@@ -38,13 +38,8 @@ body {
 }
 
 .hero h1 {
-  margin: 0 0 6px;
-  font-size: clamp(28px, 4vw, 38px);
-}
-
-.hero p {
   margin: 0;
-  color: #486581;
+  font-size: clamp(28px, 4vw, 38px);
 }
 
 .panel {
@@ -76,6 +71,23 @@ body {
   background: #1565d8;
   border-color: #1565d8;
   color: #fff;
+}
+
+.settings-block {
+  border-top: 1px solid #e0e8f0;
+  padding: 14px 0 4px;
+}
+
+.settings-block + .settings-block {
+  margin-top: 12px;
+}
+
+.block-title {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #627d98;
 }
 
 .settings-grid {
@@ -173,6 +185,26 @@ body {
   margin: 8px 0 0;
   color: #b42318;
   font-size: 14px;
+}
+
+.practice-area {
+  border-top: 1px solid #e0e8f0;
+  margin-top: 14px;
+  padding-top: 14px;
+}
+
+.practice-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 18px;
+  margin-bottom: 14px;
+}
+
+.display-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
 }
 
 .actions {
