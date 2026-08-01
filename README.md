@@ -6,19 +6,39 @@
 2. 日期听力：随机 30 题，支持自定义日期范围。
 3. 数字听力：随机 30 题，支持配置小数点前后位数。
 
-应用的语音引擎按优先级回退：
+## 语音引擎
 
-1. **操作系统内部自带语音引擎**（首选，浏览器 Web Speech API）
-2. **本地开源自然语言语音引擎**（可配置 HTTP 接口）
-3. **在线自然语言语音引擎**（可配置 HTTP 接口）
+**Piper 本地神经语音引擎为默认引擎**，保证所有浏览器 / 操作系统上的发音一致：
 
-支持 `en-US` 声音（最多展示 5 个）与「正常 / 稍快 / 最快」语速。  
-快捷键为：`Space` 重复发音、`→` 下一题、`R` 重新开始。  
-应用启动后会自动准备题目并朗读第一题。
+- 模型文件（`en_US-lessac-medium.onnx`，约 60 MB）随项目打包在
+  `public/piper-models/`，运行时 WASM（ONNX Runtime + piper_phonemize）打包在
+  `public/piper/` —— 无需外网、无 CORS 问题。
+- 首次使用后模型缓存到浏览器 OPFS，后续访问不重复加载。
+- 语音下拉框仍可切换为「操作系统语音」（Web Speech API）作备选；
+  Piper 引擎不可用时自动回退系统语音并提示。
+- 若需使用其他模型源，设置环境变量 `VITE_PIPER_MODEL_BASE`（任意
+  HuggingFace 镜像的 `diffusionstudio/piper-voices/resolve/main` 路径）。
 
-## 可选语音引擎配置
+> `@mintplex-labs/piper-tts-web` 通过 `patches/` 中的 patch-package 补丁
+> 将模型源指向本地目录并固定单线程推理，`npm install` 时自动应用。
 
-默认只使用操作系统内部语音引擎。本地/在线引擎默认关闭，可通过环境变量启用：
+## 朗读规则
+
+- 电话号码：逐位朗读（`one two three ...`）。
+- 数字：整体朗读（`1234567890` → `one billion two hundred thirty-four
+  million five hundred sixty-seven thousand eight hundred ninety`），小数读作
+  `point` 加逐位数字。
+- 日期：英文单词朗读（`2026-08-01` → `August first, twenty twenty-six`）。
+
+## 界面与快捷键
+
+- 设置按「语音设置 / 题目参数 / 显示设置」分组。
+- 快捷键：`Space` 重复发音、`→` 下一题、`R` 重新开始；
+  按钮聚焦时快捷键依然有效（不干扰输入框内的编辑操作）。
+
+## 可选 HTTP 语音引擎
+
+默认使用 Piper 引擎。本地/在线 HTTP 引擎默认关闭，可通过环境变量启用：
 
 ```bash
 VITE_LOCAL_TTS_ENABLED=true
@@ -50,4 +70,3 @@ npm run dev
 ```bash
 npm run build
 ```
-# digital_listen

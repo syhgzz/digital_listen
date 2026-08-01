@@ -13,11 +13,70 @@ const DIGIT_WORDS: Record<string, string> = {
   '9': 'nine',
 }
 
-const longDateFormatter = new Intl.DateTimeFormat('en-US', {
-  month: 'long',
-  day: 'numeric',
-  year: 'numeric',
-})
+const ONES: string[] = [
+  'zero',
+  'one',
+  'two',
+  'three',
+  'four',
+  'five',
+  'six',
+  'seven',
+  'eight',
+  'nine',
+  'ten',
+  'eleven',
+  'twelve',
+  'thirteen',
+  'fourteen',
+  'fifteen',
+  'sixteen',
+  'seventeen',
+  'eighteen',
+  'nineteen',
+]
+
+const TENS: string[] = [
+  '',
+  '',
+  'twenty',
+  'thirty',
+  'forty',
+  'fifty',
+  'sixty',
+  'seventy',
+  'eighty',
+  'ninety',
+]
+
+const SCALES: string[] = ['', 'thousand', 'million', 'billion']
+
+const MONTH_NAMES: string[] = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+]
+
+const ORDINAL_ONES: Record<number, string> = {
+  1: 'first',
+  2: 'second',
+  3: 'third',
+  4: 'fourth',
+  5: 'fifth',
+  6: 'sixth',
+  7: 'seventh',
+  8: 'eighth',
+  9: 'ninth',
+}
 
 const randomInt = (min: number, max: number): number =>
   Math.floor(Math.random() * (max - min + 1)) + min
@@ -44,16 +103,97 @@ const digitsToSpeechWords = (value: string): string =>
     .map((char) => DIGIT_WORDS[char] ?? char)
     .join(' ')
 
-const numericToSpeechWords = (value: string): string =>
-  value
-    .split('')
-    .map((char) => {
-      if (char === '.') {
-        return 'point'
-      }
-      return DIGIT_WORDS[char] ?? char
-    })
-    .join(' ')
+const threeDigitsToWords = (value: number): string => {
+  if (value === 0) {
+    return ''
+  }
+  const parts: string[] = []
+  const hundred = Math.floor(value / 100)
+  const rest = value % 100
+  if (hundred > 0) {
+    parts.push(`${ONES[hundred]} hundred`)
+  }
+  if (rest > 0) {
+    if (rest < 20) {
+      parts.push(ONES[rest])
+    } else {
+      const ten = Math.floor(rest / 10)
+      const one = rest % 10
+      parts.push(one > 0 ? `${TENS[ten]}-${ONES[one]}` : TENS[ten])
+    }
+  }
+  return parts.join(' ')
+}
+
+/**
+ * 将整数数字串转成整体英文读数（最多支持 12 位整数，即十亿级）。
+ * 示例：'1234567890' → 'one billion two hundred thirty-four million
+ * five hundred sixty-seven thousand eight hundred ninety'
+ */
+export const numberToEnglishWords = (digits: string): string => {
+  const normalized = digits.replace(/^0+(?=\d)/, '')
+  if (!normalized || normalized === '0') {
+    return 'zero'
+  }
+
+  const groupCount = Math.ceil(normalized.length / 3)
+  const padded = normalized.padStart(groupCount * 3, '0')
+  const parts: string[] = []
+
+  for (let i = 0; i < groupCount; i += 1) {
+    const groupValue = Number(padded.slice(i * 3, i * 3 + 3))
+    if (groupValue === 0) {
+      continue
+    }
+    const words = threeDigitsToWords(groupValue)
+    const scale = SCALES[groupCount - 1 - i]
+    parts.push(scale ? `${words} ${scale}` : words)
+  }
+
+  return parts.join(' ')
+}
+
+/** 将 1-31 的日期数字转成序数词，如 1 → 'first'，21 → 'twenty-first'。 */
+export const ordinalWord = (day: number): string => {
+  if (day < 1 || day > 31) {
+    return String(day)
+  }
+  if (day === 12) {
+    return 'twelfth'
+  }
+  if (day < 20) {
+    return ORDINAL_ONES[day] ?? `${ONES[day]}th`
+  }
+  const ten = Math.floor(day / 10)
+  const one = day % 10
+  if (one === 0) {
+    // twenty → twentieth，thirty → thirtieth
+    return `${TENS[ten].replace(/y$/, 'ie')}th`
+  }
+  return `${TENS[ten]}-${ORDINAL_ONES[one]}`
+}
+
+/** 年份转英文读数：2026 → 'twenty twenty-six'，1999 → 'nineteen ninety-nine'。 */
+export const yearToWords = (year: number): string => {
+  if (year >= 2000 && year < 2010) {
+    return year === 2000 ? 'two thousand' : `two thousand ${ONES[year - 2000]}`
+  }
+  if (year >= 1000) {
+    const firstHalf = Math.floor(year / 100)
+    const secondHalf = year % 100
+    const firstWords = numberToEnglishWords(String(firstHalf))
+    return secondHalf === 0 ? `${firstWords} hundred` : `${firstWords} ${numberToEnglishWords(String(secondHalf))}`
+  }
+  return numberToEnglishWords(String(year))
+}
+
+/** 日期转纯英文单词：2026-08-01 → 'August first, twenty twenty-six'。 */
+const dateToEnglishWords = (date: Date): string => {
+  const month = MONTH_NAMES[date.getMonth()]
+  const day = ordinalWord(date.getDate())
+  const year = yearToWords(date.getFullYear())
+  return `${month} ${day}, ${year}`
+}
 
 export const createPhonePracticeItems = (count: number, digitCount: number): PracticeItem[] =>
   Array.from({ length: count }, (_, index) => {
@@ -79,7 +219,7 @@ export const createDatePracticeItems = (
     const date = new Date(startDate)
     date.setDate(startDate.getDate() + offset)
 
-    const spoken = longDateFormatter.format(date)
+    const spoken = dateToEnglishWords(date)
     return {
       id: `date-${index + 1}`,
       speakText: spoken,
@@ -98,9 +238,15 @@ export const createNumberPracticeItems = (
     const fractionPart = fractionDigits > 0 ? randomDigitString(fractionDigits) : ''
     const numericValue = fractionDigits > 0 ? `${integerPart}.${fractionPart}` : integerPart
 
+    const integerWords = numberToEnglishWords(integerPart)
+    const speakText =
+      fractionDigits > 0
+        ? `${integerWords} point ${digitsToSpeechWords(fractionPart)}`
+        : integerWords
+
     return {
       id: `number-${index + 1}`,
-      speakText: numericToSpeechWords(numericValue),
+      speakText,
       answerText: numericValue,
     }
   })

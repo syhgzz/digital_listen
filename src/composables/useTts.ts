@@ -1,5 +1,14 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { SpeechRatePreset } from '../types/practice'
+import {
+  PIPER_VOICES,
+  isPiperVoiceStored,
+  playWavBlob,
+  preloadPiperVoice,
+  stopPiperPlayback,
+  synthesizePiperSpeech,
+} from '../utils/piperTts'
+import type { Progress, VoiceId } from '@mintplex-labs/piper-tts-web'
 
 interface HttpTtsEngineOptions {
   enabled?: boolean
@@ -16,7 +25,7 @@ interface UseTtsOptions {
   onlineEngine?: HttpTtsEngineOptions
 }
 
-export type TtsEngineSource = 'os' | 'local' | 'online' | 'none'
+export type TtsEngineSource = 'os' | 'piper' | 'local' | 'online' | 'none'
 
 export const SYSTEM_DEFAULT_VOICE_ID = '__system_default__'
 export const LOCAL_ENGINE_ID = '__local_engine__'
@@ -73,6 +82,7 @@ export const useTts = (options: UseTtsOptions = {}) => {
   const speaking = ref(false)
   const ttsError = ref('')
   const activeEngineSource = ref<TtsEngineSource>('none')
+  const piperDownloadProgress = ref<{ voiceId: VoiceId; percent: number } | null>(null)
   const requestController = ref<AbortController | null>(null)
   let speakGeneration = 0
 
@@ -89,9 +99,8 @@ export const useTts = (options: UseTtsOptions = {}) => {
 
   const voicePrefix = (options.langPrefix ?? 'en-US').toLowerCase()
   const maxVoices = options.maxVoices ?? 5
-  const anyEngineConfigured = computed(
-    () => osSupported || localEngine.enabled || onlineEngine.enabled,
-  )
+  // Piper 神经引擎随项目内置（模型首次运行时下载并缓存），始终可用。
+  const anyEngineConfigured = computed(() => true)
 
   const availableVoices = computed(() =>
     [...allVoices.value]
@@ -109,10 +118,21 @@ export const useTts = (options: UseTtsOptions = {}) => {
   const allVoiceOptions = computed<VoiceOption[]>(() => {
     const sourceLabel = (source: TtsEngineSource) => {
       if (source === 'os') return '操作系统'
+      if (source === 'piper') return '本地神经'
       if (source === 'local') return '本地开源'
       return '在线'
     }
     const options: VoiceOption[] = []
+
+    for (const def of PIPER_VOICES) {
+      options.push({
+        id: def.voiceId,
+        name: def.name,
+        lang: 'en-US',
+        source: 'piper',
+        sourceLabel: sourceLabel('piper'),
+      })
+    }
 
     if (osSupported) {
       const defaultVoice = allVoices.value.find((v) => v.default)
@@ -196,9 +216,37 @@ export const useTts = (options: UseTtsOptions = {}) => {
     { immediate: true },
   )
 
+  // 选中 Piper 声音且模型尚未缓存时，后台预下载模型
+  watch(
+    selectedVoiceURI,
+    (uri) => {
+      const voiceDef = PIPER_VOICES.find((def) => def.voiceId === uri)
+      if (!voiceDef) {
+        return
+      }
+      void isPiperVoiceStored(voiceDef.voiceId).then((alreadyStored) => {
+        if (alreadyStored) {
+          return
+        }
+        void preloadPiperVoice(voiceDef.voiceId, (progress) => {
+          if (selectedVoiceURI.value !== voiceDef.voiceId || progress.total <= 0) {
+            return
+          }
+          piperDownloadProgress.value = {
+            voiceId: voiceDef.voiceId,
+            percent: Math.min(100, Math.round((progress.loaded / progress.total) * 100)),
+          }
+        })
+      })
+    },
+    { immediate: true },
+  )
+
   const stop = () => {
+    speakGeneration += 1
     requestController.value?.abort()
     requestController.value = null
+    stopPiperPlayback()
 
     if (osSupported) {
       window.speechSynthesis.cancel()
@@ -262,6 +310,34 @@ export const useTts = (options: UseTtsOptions = {}) => {
 
       window.speechSynthesis.speak(utterance)
     })
+  }
+
+  const speakWithPiperEngine = async (text: string, gen: number) => {
+    const voiceId = selectedVoiceURI.value as VoiceId
+    const onProgress = (progress: Progress) => {
+      if (progress.total <= 0) {
+        return
+      }
+      piperDownloadProgress.value = {
+        voiceId,
+        percent: Math.min(100, Math.round((progress.loaded / progress.total) * 100)),
+      }
+    }
+
+    speaking.value = true
+    try {
+      const wavBlob = await synthesizePiperSpeech(voiceId, text, onProgress)
+      if (gen !== speakGeneration) {
+        return
+      }
+      piperDownloadProgress.value = null
+      await playWavBlob(wavBlob, speechRateByPreset[selectedRatePreset.value])
+    } finally {
+      if (gen === speakGeneration) {
+        piperDownloadProgress.value = null
+        speaking.value = false
+      }
+    }
   }
 
   const speakWithHttpEngine = async (
@@ -332,7 +408,9 @@ export const useTts = (options: UseTtsOptions = {}) => {
         throw new Error('未选择语音引擎。')
       }
 
-      if (selectedOption.source === 'os') {
+      if (selectedOption.source === 'piper') {
+        await speakWithPiperEngine(trimmedText, gen)
+      } else if (selectedOption.source === 'os') {
         await speakWithOsEngine(trimmedText)
       } else if (selectedOption.source === 'local') {
         await speakWithHttpEngine('local', localEngine, trimmedText)
@@ -343,6 +421,18 @@ export const useTts = (options: UseTtsOptions = {}) => {
       activeEngineSource.value = selectedOption.source
     } catch (error) {
       if (gen !== speakGeneration) return
+      // Piper 引擎不可用时自动回退系统语音，保证任何环境都能出声
+      if (selectedOption?.source === 'piper' && osSupported) {
+        try {
+          await speakWithOsEngine(trimmedText)
+          if (gen !== speakGeneration) return
+          activeEngineSource.value = 'os'
+          ttsError.value = '本地神经语音引擎不可用，已自动切换为系统语音。'
+          return
+        } catch {
+          // 回退失败时继续走下方统一错误提示
+        }
+      }
       activeEngineSource.value = 'none'
       ttsError.value = error instanceof Error ? error.message : '语音播放失败。'
     }
@@ -368,6 +458,7 @@ export const useTts = (options: UseTtsOptions = {}) => {
     allVoiceOptions,
     anyEngineConfigured,
     availableVoices,
+    piperDownloadProgress,
     selectedRatePreset,
     selectedVoiceURI,
     speaking,

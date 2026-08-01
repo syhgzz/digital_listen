@@ -78,11 +78,26 @@ body {
   color: #fff;
 }
 
+.settings-group {
+  min-inline-size: 0;
+  border: 1px solid #d9e2ec;
+  border-radius: 12px;
+  padding: 12px 14px 14px;
+  margin: 0 0 14px;
+  background: #fbfdff;
+}
+
+.settings-group legend {
+  padding: 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #486581;
+}
+
 .settings-grid {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  margin-bottom: 10px;
 }
 
 .field {
@@ -172,6 +187,12 @@ body {
 .error-text {
   margin: 8px 0 0;
   color: #b42318;
+  font-size: 14px;
+}
+
+.hint-text {
+  margin: 8px 0 0;
+  color: #486581;
   font-size: 14px;
 }
 
