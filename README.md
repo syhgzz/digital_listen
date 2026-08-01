@@ -6,42 +6,17 @@
 2. 日期听力：随机 30 题，支持自定义日期范围。
 3. 数字听力：随机 30 题，支持配置小数点前后位数。
 
-应用的语音引擎按优先级回退：
+应用使用项目内置的 MIT 许可 Piper WASM 英语语音引擎，不依赖操作系统声音或浏览器 Web Speech API。模型在浏览器 Worker 中运行，模型文件从应用自身地址加载，并在支持的浏览器中复用模型缓存；Safari/WebKit 会使用同源静态资源缓存，避免其 OPFS 模型缓存错误影响播放。
 
-1. **操作系统内部自带语音引擎**（首选，浏览器 Web Speech API）
-2. **本地开源自然语言语音引擎**（可配置 HTTP 接口）
-3. **在线自然语言语音引擎**（可配置 HTTP 接口）
-
-支持 `en-US` 声音（最多展示 5 个）与「正常 / 稍快 / 最快」语速。  
+支持「正常 / 稍快 / 最快」语速。首次播放需要点击“开始训练”或“重复发音”以满足浏览器音频权限策略；首次加载模型约需下载 63 MB，之后由浏览器缓存复用。
 快捷键为：`Space` 重复发音、`→` 下一题、`R` 重新开始。  
-应用启动后会自动准备题目并朗读第一题。
-
-## 可选语音引擎配置
-
-默认只使用操作系统内部语音引擎。本地/在线引擎默认关闭，可通过环境变量启用：
-
-```bash
-VITE_LOCAL_TTS_ENABLED=true
-VITE_LOCAL_TTS_ENDPOINT=http://127.0.0.1:5000/speak
-VITE_ONLINE_TTS_ENABLED=true
-VITE_ONLINE_TTS_ENDPOINT=https://example.com/tts
-```
-
-请求方式为 `POST` JSON，基础请求体：
-
-```json
-{
-  "text": "hello world",
-  "lang": "en-US",
-  "ratePreset": "normal",
-  "rate": 1
-}
-```
+应用启动后不会自动播放，首次播放由用户操作触发。
 
 ## 本地运行
 
 ```bash
 npm install
+npm run setup:models
 npm run dev
 ```
 
@@ -50,4 +25,9 @@ npm run dev
 ```bash
 npm run build
 ```
-# digital_listen
+
+`npm run setup:models` 会下载固定版本的 `en_US-lessac-medium` 模型并校验 SHA-256。`npm install` 会将 Piper 和 ONNX Runtime 的 WASM 文件复制到 `public/wasm/`；`npm run build` 会先执行模型校验，避免漏带模型资源。
+
+## 支持范围
+
+支持当前及上一主要版本的 Chrome、Edge、Firefox、Safari，以及 Android Chrome 和 iOS Safari。浏览器必须支持 WebAssembly、Web Worker 和 Web Audio；不支持这些能力的旧浏览器会显示兼容性错误。

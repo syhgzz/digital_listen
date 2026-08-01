@@ -11,6 +11,12 @@ node_modules
 dist
 dist-ssr
 *.local
+.playwright-cli/
+.superpowers/
+
+# Generated Piper speech assets
+public/models/
+public/wasm/
 
 # Editor directories and files
 .vscode/*
