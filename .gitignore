@@ -12,6 +12,14 @@ dist
 dist-ssr
 *.local
 
+# Local TTS engine assets (downloaded via `npm run setup:tts`)
+public/sherpa/*
+!public/sherpa/sherpa-tts.worker.js
+.tts-download
+
+# Playwright CLI session artifacts
+.playwright-cli/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
