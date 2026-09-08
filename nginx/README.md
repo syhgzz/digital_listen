@@ -17,8 +17,8 @@ npm run tts:setup
 npm run build
 
 # 4. 发布静态文件
-sudo mkdir -p /var/www/digital_listen
-sudo rsync -a --delete dist/ /var/www/digital_listen/dist/
+sudo mkdir -p /var/www/digital_listen_dsh41f
+sudo rsync -a --delete dist/ /var/www/digital_listen_dsh41f/
 
 # 5. 安装 nginx 配置
 sudo cp nginx/digital-listen.conf /etc/nginx/conf.d/
@@ -40,7 +40,7 @@ sudo ufw allow 53002/tcp      # 或云厂商安全组放行 53002
 
 | 项 | 说明 |
 | --- | --- |
-| `root` | 默认 `/var/www/digital_listen/dist`，按实际部署路径修改 |
+| `root` | `/var/www/digital_listen_dsh41f`（构建产物内容直接放在这里，不再套一层 `dist/`） |
 | `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy` | 让页面进入 `crossOriginIsolated`，ONNX Runtime 才能多线程推理；本应用资源全部同源，可安全启用。若以后引入跨域 CDN 资源需相应加 CORP 头，或删除这两行 |
 | `/assets/` 缓存 | 文件名含内容哈希，`expires 1y` |
 | `/tts/voices/*.onnx` 缓存 | 约 60MB，`expires 1y`；更换音色会换文件名（如 `en_US-lessac-medium.onnx`），如需替换同名声学模型请改名或清理浏览器缓存 |

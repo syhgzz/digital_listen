@@ -80,7 +80,7 @@ npm run tts:setup  # 重新准备语音资源
 
 ```bash
 npm run build
-sudo rsync -a --delete dist/ /var/www/digital_listen/dist/
+sudo rsync -a --delete dist/ /var/www/digital_listen_dsh41f/
 sudo cp nginx/digital-listen.conf /etc/nginx/conf.d/
 sudo nginx -t && sudo systemctl reload nginx
 ```
