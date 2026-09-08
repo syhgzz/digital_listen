@@ -74,6 +74,20 @@ npm run test       # 单元测试（朗读文本、快捷键判定、题目生�
 npm run tts:setup  # 重新准备语音资源
 ```
 
+## 部署（nginx）
+
+仓库内附带部署配置 `nginx/digital-listen.conf`（监听 **53002**）与说明 `nginx/README.md`：
+
+```bash
+npm run build
+sudo rsync -a --delete dist/ /var/www/digital_listen/dist/
+sudo cp nginx/digital-listen.conf /etc/nginx/conf.d/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+配置要点：`assets/` 与语音模型长期缓存、`manifest.json`/Piper 运行时每次校验、
+gzip 压缩 wasm、COOP/COEP 开启 ONNX Runtime 多线程，详见 `nginx/README.md`。
+
 ## 许可说明
 
 - Piper 语音模型、`onnxruntime-web`、`@diffusionstudio/piper-wasm` 的代码均为 MIT。
