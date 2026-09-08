@@ -1,23 +1,5 @@
 import type { PracticeItem } from '../types/practice'
-
-const DIGIT_WORDS: Record<string, string> = {
-  '0': 'zero',
-  '1': 'one',
-  '2': 'two',
-  '3': 'three',
-  '4': 'four',
-  '5': 'five',
-  '6': 'six',
-  '7': 'seven',
-  '8': 'eight',
-  '9': 'nine',
-}
-
-const longDateFormatter = new Intl.DateTimeFormat('en-US', {
-  month: 'long',
-  day: 'numeric',
-  year: 'numeric',
-})
+import { dateToSpeakText, digitsToWords, formatDateLabel, numberToSpeakText } from './speechText'
 
 const randomInt = (min: number, max: number): number =>
   Math.floor(Math.random() * (max - min + 1)) + min
@@ -38,29 +20,12 @@ const toLocalISODate = (date: Date): string => {
   return `${year}-${month}-${day}`
 }
 
-const digitsToSpeechWords = (value: string): string =>
-  value
-    .split('')
-    .map((char) => DIGIT_WORDS[char] ?? char)
-    .join(' ')
-
-const numericToSpeechWords = (value: string): string =>
-  value
-    .split('')
-    .map((char) => {
-      if (char === '.') {
-        return 'point'
-      }
-      return DIGIT_WORDS[char] ?? char
-    })
-    .join(' ')
-
 export const createPhonePracticeItems = (count: number, digitCount: number): PracticeItem[] =>
   Array.from({ length: count }, (_, index) => {
     const digits = randomDigitString(digitCount)
     return {
       id: `phone-${index + 1}`,
-      speakText: digitsToSpeechWords(digits),
+      speakText: digitsToWords(digits),
       answerText: digits,
     }
   })
@@ -79,11 +44,10 @@ export const createDatePracticeItems = (
     const date = new Date(startDate)
     date.setDate(startDate.getDate() + offset)
 
-    const spoken = longDateFormatter.format(date)
     return {
       id: `date-${index + 1}`,
-      speakText: spoken,
-      answerText: `${toLocalISODate(date)} (${spoken})`,
+      speakText: dateToSpeakText(date),
+      answerText: `${toLocalISODate(date)} (${formatDateLabel(date)})`,
     }
   })
 }
@@ -100,7 +64,7 @@ export const createNumberPracticeItems = (
 
     return {
       id: `number-${index + 1}`,
-      speakText: numericToSpeechWords(numericValue),
+      speakText: numberToSpeakText(numericValue),
       answerText: numericValue,
     }
   })
