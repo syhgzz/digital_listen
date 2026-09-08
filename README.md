@@ -81,8 +81,10 @@ npm run tts:setup  # 重新准备语音资源
 
 ```bash
 cd /srv/digital_listen
-sudo ./deploy.sh          # 准备语音资源 → 构建 → 发布 → 装配置 → nginx -t 校验并重载
+./deploy.sh               # 准备语音资源 → 构建 → 发布 → 装配置 → nginx -t 校验并重载
 ```
+
+> 不要加 `sudo`（需要 root 的步骤脚本会自动 sudo；node 由 nvm 安装时 sudo 会找不到 node）。
 
 手动方式与参数说明见 `nginx/README.md`。
 

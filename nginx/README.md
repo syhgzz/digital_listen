@@ -10,8 +10,12 @@
 
 ```bash
 cd /srv/digital_listen
-sudo ./deploy.sh
+./deploy.sh
 ```
+
+> 不要加 `sudo`：脚本会对需要 root 的步骤（写 `/var/www`、装 nginx 配置、reload）自动调用 sudo。
+> 若 node 由 nvm 安装，加 sudo 会导致 `secure_path` 里找不到 node（报 `缺少命令：node`）；
+> 确需 sudo 时用 `sudo env "PATH=$PATH" ./deploy.sh`。
 
 常用参数：
 

@@ -3,7 +3,11 @@
 # 数字听力训练（digital_listen）— 一键部署脚本
 #
 # 在服务器上的项目目录中执行（默认部署到 /var/www/digital_listen_dsh41f，端口 53002）：
-#   sudo ./deploy.sh
+#   ./deploy.sh
+#
+# 需要 root 的步骤（写 /var/www、安装 nginx 配置、reload）脚本会自动调用 sudo。
+# node 由 nvm 安装时请勿加 sudo（sudo 的 secure_path 里没有 node）；若必须用 sudo：
+#   sudo env "PATH=$PATH" ./deploy.sh
 #
 # 常用选项：
 #   ./deploy.sh --skip-install      跳过 npm ci
@@ -39,7 +43,8 @@ die() {
 }
 
 usage() {
-  sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  # 打印文件头部的注释块（遇到第一条非注释语句即停止）
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"
   cat <<'EOF'
 可用选项：
   --web-root <路径>   部署目录（默认 /var/www/digital_listen_dsh41f）
@@ -115,12 +120,72 @@ else
   command -v sudo >/dev/null 2>&1 || die "缺少命令：sudo（请用 root 运行或安装 sudo）"
 fi
 
-for cmd in node npm rsync; do
+# ------------------------------------------------------------ 查找 node/npm ---
+# sudo 默认使用 secure_path，nvm / 用户级安装的 node 不在其中；这里主动探测，
+# 并覆盖 sudo 场景（$HOME 变成 /root，需要回看 SUDO_USER 的家目录）。
+resolve_home() {
+  local user="$1" home=""
+  if [[ -n "$user" ]]; then
+    home="$(getent passwd "$user" 2>/dev/null | cut -d: -f6 || true)"
+  fi
+  [[ -n "$home" ]] || home="$HOME"
+  printf '%s' "$home"
+}
+
+ensure_node_on_path() {
+  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local candidates=() home dir
+  for user in "${SUDO_USER:-}" "$(id -un)"; do
+    home="$(resolve_home "$user")"
+    [[ -n "$home" && -d "$home" ]] || continue
+    while IFS= read -r dir; do
+      [[ -n "$dir" ]] && candidates+=("$dir")
+    done < <(ls -d "$home"/.nvm/versions/node/*/bin 2>/dev/null | sort -V -r)
+    candidates+=("$home/.local/bin" "$home/.volta/bin" "$home/bin" "$home/.n/bin")
+  done
+  candidates+=(/usr/local/bin /usr/bin /usr/local/node/bin /opt/node/bin /snap/bin)
+
+  for dir in "${candidates[@]}"; do
+    if [[ -x "$dir/node" ]]; then
+      export PATH="$dir:$PATH"
+      if command -v npm >/dev/null 2>&1; then
+        log "使用 Node：$dir/node（$(node -v)）"
+        return 0
+      fi
+    fi
+  done
+
+  return 1
+}
+
+if ! ensure_node_on_path; then
+  cat >&2 <<'EOF'
+[x] 缺少命令：node / npm
+
+排查建议：
+  1. 若 node 由 nvm 安装，请不要用 sudo 运行本脚本（脚本内部对需要 root 的步骤会自动 sudo）：
+         ./deploy.sh
+  2. 如果必须用 sudo，请把当前 PATH 传进去：
+         sudo env "PATH=$PATH" ./deploy.sh
+  3. 未安装 Node 时先安装（Node 20.19+ / 22.12+）：
+         curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs
+EOF
+  exit 1
+fi
+
+for cmd in rsync; do
   command -v "$cmd" >/dev/null 2>&1 || die "缺少命令：$cmd"
 done
 
 if [[ "$NO_NGINX" -eq 0 ]]; then
   command -v nginx >/dev/null 2>&1 || die "缺少命令：nginx（或用 --no-nginx 跳过）"
+fi
+
+if [[ "$EUID" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+  warn "正在以 sudo 运行：npm 生成的 node_modules 会属于 root。建议直接执行 ./deploy.sh（脚本会自动对需要的步骤调用 sudo）"
 fi
 
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
@@ -175,6 +240,15 @@ fi
 
 if [[ ! -d dist || ! -f dist/index.html ]]; then
   die "未找到可发布的 dist/（请先执行 npm run build）"
+fi
+
+# 以 sudo 运行时 npm 会生成 root 所有的文件，归还给调用者，方便下次普通用户执行
+if [[ "$EUID" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+  SUDO_GROUP="$(id -gn "$SUDO_USER" 2>/dev/null || true)"
+  if [[ -n "$SUDO_GROUP" ]]; then
+    chown -R "$SUDO_USER:$SUDO_GROUP" node_modules dist public/tts 2>/dev/null ||
+      warn "无法把 node_modules/dist 归还给 $SUDO_USER（可忽略）"
+  fi
 fi
 
 # ------------------------------------------------------------------ 5. 发布 ---
