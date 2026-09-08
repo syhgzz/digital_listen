@@ -27,7 +27,11 @@
 
 1. **浏览器 OPFS 缓存**（`tts-model/`）——命中则零网络，刷新页面秒开
 2. **HF 镜像站**（默认 `https://hf-mirror.com/diffusionstudio/piper-voices/resolve/main`）——离服务器远的客户端更快
-3. **本站 `/tts/voices/`**——镜像被墙/超时/字节数不符时自动兜底
+3. **本站 `/tts/voices/`**——镜像被墙/超时/字节数不符时自动兜底（连续 10 秒无数据即放弃）
+
+> 注意：hf-mirror / aifasthub 等「国内镜像」只镜像元数据，大文件会 302 跳转到 AWS
+> （`cas-bridge.xethub.hf.co` / `us.aws.cdn.hf.co`），国内网络常常连不上，此时会自动回退到本站。
+> 如果镜像在你的网络里不可用，可设 `VITE_TTS_MIRROR_BASE=` 关闭镜像优先，直接从服务器加载。
 
 镜像下载完成后会写入 OPFS，因此第二次访问不再下载（镜像的签名跳转无法被浏览器 HTTP 缓存复用）。
 来源会显示在「语音设置」的状态标签上（`就绪 · 镜像站` / `本地缓存` / `服务器`）。

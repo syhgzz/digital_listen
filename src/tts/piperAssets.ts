@@ -11,8 +11,12 @@ export const DEFAULT_MIRROR_BASE =
 /** Voice used when the user has not picked one explicitly. */
 export const DEFAULT_VOICE_ID = 'en_US-lessac-medium'
 
-/** Give up on a source when no new chunk arrives for this long. */
-export const STALL_TIMEOUT_MS = 30_000
+/**
+ * Give up on a source when no new chunk arrives for this long. Kept short so a
+ * blocked mirror (its large files are served through an AWS redirect that is
+ * often unreachable in China) falls back to the app origin quickly.
+ */
+export const STALL_TIMEOUT_MS = 10_000
 
 export interface PiperVoiceEntry {
   id: string
