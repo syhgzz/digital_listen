@@ -9,6 +9,7 @@ import {
   type TtsEngine,
   type TtsEngineId,
   type TtsEngineStatus,
+  type TtsModelSource,
   type TtsProgress,
   type TtsVoiceOption,
 } from '../tts/types'
@@ -30,6 +31,8 @@ interface TtsDebugState {
   lastClipDurationMs: number
   lastClipRms: number
   engineStatus: TtsEngineStatus
+  modelSource: string | null
+  voiceId: string
 }
 
 declare global {
@@ -52,6 +55,7 @@ export const useTts = (options: UseTtsOptions = {}) => {
   const needsGesture = ref(false)
   const activeEngineId = ref<TtsEngineId | null>(null)
   const engineStatus = ref<TtsEngineStatus>('idle')
+  const modelSource = ref<TtsModelSource | null>(null)
 
   const engines: TtsEngines = createTtsEngines({
     onDebugClip: ({ text, durationMs, rms }) => {
@@ -63,11 +67,15 @@ export const useTts = (options: UseTtsOptions = {}) => {
             lastText: '',
             lastClipDurationMs: 0,
             lastClipRms: 0,
+            modelSource: null,
+            voiceId: '',
           }),
           activeEngineId: activeEngineId.value,
           lastText: text,
           lastClipDurationMs: durationMs,
           lastClipRms: rms,
+          modelSource: engines.piper.getModelSource(),
+          voiceId: engines.piper.getSelectedVoiceId(),
         }
       }
     },
@@ -110,7 +118,7 @@ export const useTts = (options: UseTtsOptions = {}) => {
         key: `piper:${voice.id}`,
         engineId: 'piper',
         voiceId: voice.id,
-        label: `${voice.name}（${voice.quality}）`,
+        label: voice.label ?? `${voice.name}（${voice.quality}）`,
         group: '本地引擎',
         available: true,
       })
@@ -166,11 +174,22 @@ export const useTts = (options: UseTtsOptions = {}) => {
   const syncStatus = () => {
     const status = engineForOption(selectedOption.value).getStatus()
     engineStatus.value = status
+    modelSource.value = engines.piper.getModelSource()
     if (import.meta.env.DEV) {
       window.__ttsDebug = {
-        ...(window.__ttsDebug ?? { activeEngineId: null, lastText: '', lastClipDurationMs: 0, lastClipRms: 0, engineStatus: status }),
+        ...(window.__ttsDebug ?? {
+          activeEngineId: null,
+          lastText: '',
+          lastClipDurationMs: 0,
+          lastClipRms: 0,
+          engineStatus: status,
+          modelSource: null,
+          voiceId: '',
+        }),
         activeEngineId: activeEngineId.value,
         engineStatus: status,
+        modelSource: engines.piper.getModelSource(),
+        voiceId: engines.piper.getSelectedVoiceId(),
       }
     }
   }
@@ -304,6 +323,7 @@ export const useTts = (options: UseTtsOptions = {}) => {
     error,
     hasLocalVoice,
     isPreparing,
+    modelSource,
     needsGesture,
     notice,
     prepare,

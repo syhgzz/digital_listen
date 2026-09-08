@@ -2,6 +2,8 @@ export type TtsEngineId = 'piper' | 'remote' | 'system'
 export type TtsEngineKind = 'local' | 'online' | 'system'
 export type TtsEngineStatus = 'unavailable' | 'idle' | 'preparing' | 'ready' | 'error'
 export type TtsProgressStage = 'runtime' | 'voice' | 'model' | 'synthesis'
+/** Where a voice model was obtained from. */
+export type TtsModelSource = 'cache' | 'mirror' | 'server'
 
 export interface TtsProgress {
   stage: TtsProgressStage
@@ -9,6 +11,7 @@ export interface TtsProgress {
   total: number
   ratio: number
   message: string
+  source?: TtsModelSource
 }
 
 export interface TtsSpeakOptions {

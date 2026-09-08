@@ -2,16 +2,16 @@
 /**
  * Provisions the local (self-hosted) TTS assets into `public/tts`:
  *
- *   node scripts/tts-assets.mjs --runtime            copy ORT + Piper WASM from node_modules
- *   node scripts/tts-assets.mjs --voice <id> [...]   download one or more Piper voices
- *   node scripts/tts-assets.mjs --runtime --voice en_US-lessac-medium   (npm run tts:setup)
+ *   node scripts/tts-assets.mjs --runtime                 copy the Piper WASM runtime from node_modules
+ *   node scripts/tts-assets.mjs --defaults                download the default English voice set (~360MB)
+ *   node scripts/tts-assets.mjs --voice en_US-amy-medium  download one voice (repeatable)
+ *   node scripts/tts-assets.mjs --voices a,b,c            download an explicit voice list
+ *   node scripts/tts-assets.mjs                           runtime + default voices (npm run tts:setup)
  *
- * Everything lands in `public/tts` which is gitignored: a fresh clone runs
- * `npm install` (runtime assets are copied automatically) and one explicit
- * `npm run tts:setup` to fetch the ~60MB voice model. After that the app is
- * fully offline and every browser uses exactly the same voice.
+ * Everything lands in `public/tts` which is gitignored. The manifest is always
+ * rebuilt by scanning the directory, so adding or removing a voice keeps the
+ * list served to the frontend in sync.
  */
-import { createHash } from 'node:crypto'
 import { mkdir, readFile, readdir, rm, stat, writeFile, copyFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -19,13 +19,37 @@ import { fileURLToPath } from 'node:url'
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const ttsRoot = path.join(projectRoot, 'public', 'tts')
 
-const DEFAULT_VOICE = 'en_US-lessac-medium'
+/** Default English voice set (~60MB each). Trim or extend with --voices. */
+const DEFAULT_VOICES = [
+  'en_US-lessac-medium',
+  'en_US-hfc_female-medium',
+  'en_US-hfc_male-medium',
+  'en_US-ryan-medium',
+  'en_GB-jenny_dioco-medium',
+  'en_GB-alan-medium',
+]
+
+/** Friendly labels shown in the UI; unknown ids fall back to the voice id. */
+const VOICE_LABELS = {
+  'en_US-lessac-medium': 'Lessac（美音·女声）',
+  'en_US-hfc_female-medium': 'HFC Female（美音·女声）',
+  'en_US-hfc_male-medium': 'HFC Male（美音·男声）',
+  'en_US-ryan-medium': 'Ryan（美音·男声）',
+  'en_US-amy-medium': 'Amy（美音·女声）',
+  'en_GB-jenny_dioco-medium': 'Jenny（英音·女声）',
+  'en_GB-alan-medium': 'Alan（英音·男声）',
+}
+
+/** Mirror the browser tries first; written into the manifest for the frontend. */
+const MIRROR_BASE =
+  process.env.VITE_TTS_MIRROR_BASE ?? 'https://hf-mirror.com/diffusionstudio/piper-voices/resolve/main'
 
 const MODEL_BASES = [
   process.env.VITE_TTS_MODEL_BASE,
+  MIRROR_BASE,
   'https://huggingface.co/diffusionstudio/piper-voices/resolve/main',
   'https://hf-mirror.com/diffusionstudio/piper-voices/resolve/main',
-].filter((base) => typeof base === 'string' && base.length > 0)
+].filter((base, index, list) => typeof base === 'string' && base.length > 0 && list.indexOf(base) === index)
 
 /** Piper voice repository layout: <language>/<locale>/<name>/<quality>/<voiceId>.onnx */
 const voiceRepositoryPath = (voiceId) => {
@@ -36,21 +60,23 @@ const voiceRepositoryPath = (voiceId) => {
 
 const args = process.argv.slice(2)
 const wantRuntime = args.includes('--runtime') || args.length === 0
-const voices = []
+let voices = []
+let voicesExplicit = false
 for (let index = 0; index < args.length; index += 1) {
-  if (args[index] === '--voice') {
+  if (args[index] === '--voice' || args[index] === '--voices') {
     const value = args[index + 1]
     if (!value) {
-      throw new Error('--voice 需要提供音色 id，例如 --voice en_US-lessac-medium')
+      throw new Error('--voice/--voices 需要提供音色 id，例如 --voice en_US-amy-medium')
     }
-    voices.push(value)
+    voices.push(...value.split(',').map((id) => id.trim()).filter(Boolean))
+    voicesExplicit = true
     index += 1
   }
 }
 // A bare invocation provisions everything; `--runtime` alone never downloads a
 // 60MB model behind the user's back (predev/prebuild use that form).
-if (voices.length === 0 && args.length === 0) {
-  voices.push(DEFAULT_VOICE)
+if (!voicesExplicit && (args.length === 0 || args.includes('--defaults'))) {
+  voices.push(...DEFAULT_VOICES)
 }
 
 const log = (message) => process.stdout.write(`${message}\n`)
@@ -172,38 +198,56 @@ const downloadVoice = async (voiceId) => {
     const buffer = await fetchFromBases(`${repositoryPath}.onnx.json`)
     await writeFile(configPath, buffer)
   }
-
-  const config = JSON.parse(await readFile(configPath, 'utf8'))
-  return {
-    id: voiceId,
-    name: voiceId.split('-')[1] ?? voiceId,
-    language: voiceId.split('-')[0].replace('_', '-'),
-    quality: voiceId.split('-')[2] ?? 'medium',
-    sizeBytes: await fileSize(modelPath),
-    modelFile,
-    configFile,
-    sampleRate: config?.audio?.sample_rate ?? 22050,
-    md5: createHash('md5').update(await readFile(modelPath)).digest('hex'),
-  }
 }
 
-const writeManifest = async (entries) => {
+/**
+ * Rebuilds manifest.json by scanning the voices directory, so the list the
+ * frontend sees always matches what is actually provisioned on disk.
+ */
+const rebuildManifest = async () => {
   const voicesDir = path.join(ttsRoot, 'voices')
-  const existing = await readdir(voicesDir).catch(() => [])
-  const onDisk = new Set(existing.filter((file) => file.endsWith('.onnx')))
+  const modelFiles = (await readdir(voicesDir).catch(() => []))
+    .filter((file) => file.endsWith('.onnx'))
+    .sort()
+
+  const entries = []
+  for (const modelFile of modelFiles) {
+    const id = modelFile.replace(/\.onnx$/, '')
+    const configFile = `${modelFile}.json`
+    let sampleRate = 22050
+    try {
+      const config = JSON.parse(await readFile(path.join(voicesDir, configFile), 'utf8'))
+      sampleRate = config?.audio?.sample_rate ?? 22050
+    } catch {
+      // Missing or unreadable config: keep the default sample rate.
+    }
+
+    entries.push({
+      id,
+      label: VOICE_LABELS[id] ?? id,
+      name: id.split('-')[1] ?? id,
+      language: (id.split('-')[0] ?? '').replace('_', '-'),
+      quality: id.split('-')[2] ?? 'medium',
+      sizeBytes: await fileSize(path.join(voicesDir, modelFile)),
+      modelFile,
+      configFile,
+      repoPath: voiceRepositoryPath(id),
+      sampleRate,
+    })
+  }
 
   const manifest = {
     generatedAt: new Date().toISOString(),
-    voices: entries
-      .filter((entry) => onDisk.has(entry.modelFile))
-      .map(({ sampleRate, md5, ...voice }) => ({ ...voice, sampleRate, md5 })),
+    mirrorBase: MIRROR_BASE,
+    voices: entries,
   }
   await writeFile(
     path.join(voicesDir, 'manifest.json'),
     `${JSON.stringify(manifest, null, 2)}\n`,
     'utf8',
   )
-  log(`  已写入 manifest.json（${manifest.voices.length} 个音色）`)
+  log(`  已写入 manifest.json（${entries.length} 个音色）`)
+  return entries
 }
 
 const main = async () => {
@@ -215,29 +259,28 @@ const main = async () => {
   }
 
   if (voices.length > 0) {
-    const entries = []
     for (const voiceId of voices) {
       log(`准备音色 ${voiceId}`)
-      entries.push(await downloadVoice(voiceId))
+      await downloadVoice(voiceId)
     }
-    await writeManifest(entries)
+    const entries = await rebuildManifest()
+    const totalMb = entries.reduce((sum, entry) => sum + entry.sizeBytes, 0) / 1_048_576
+    log(`  当前共 ${entries.length} 个音色，合计 ${totalMb.toFixed(0)}MB`)
   } else {
-    const voicesDir = path.join(ttsRoot, 'voices')
-    const present = (await readdir(voicesDir).catch(() => [])).filter((file) =>
+    const present = (await readdir(path.join(ttsRoot, 'voices')).catch(() => [])).filter((file) =>
       file.endsWith('.onnx'),
     )
     if (present.length === 0) {
-      log('提示：尚未准备本地语音模型，请运行 npm run tts:setup（约 60MB，只需一次）。')
+      log('提示：尚未准备本地语音模型，请运行 npm run tts:setup（约 360MB，只需一次）。')
+    } else {
+      await rebuildManifest()
     }
   }
 
   log('完成。')
 }
 
-main().catch(async (error) => {
-  if (error instanceof Error && error.message.startsWith('所有语音镜像')) {
-    await rm(path.join(ttsRoot, 'voices'), { recursive: true, force: true })
-  }
+main().catch((error) => {
   console.error(`\n语音资源准备失败：${error.message}`)
   process.exitCode = 1
 })

@@ -1,19 +1,27 @@
 import {
+  DEFAULT_VOICE_ID,
   TTS_BASE_PATH,
   fetchVoiceModel,
   loadPiperPhonemize,
   loadVoiceConfig,
   loadVoiceManifest,
+  resolveMirrorBase,
   type PiperPhonemizeModule,
   type PiperVoiceConfig,
   type PiperVoiceEntry,
 } from './piperAssets'
+import {
+  readCachedModel,
+  requestPersistentStorage,
+  writeCachedModel,
+} from './piperModelCache'
 import type { InferenceSession } from 'onnxruntime-web/wasm'
 import {
   TtsCanceledError,
   TtsPlaybackBlockedError,
   type TtsEngine,
   type TtsEngineStatus,
+  type TtsModelSource,
   type TtsProgress,
   type TtsSpeakOptions,
 } from './types'
@@ -66,6 +74,9 @@ export class PiperEngine implements TtsEngine {
   private voices: PiperVoiceEntry[] = []
   private voice: PiperVoiceEntry | null = null
   private config: PiperVoiceConfig | null = null
+  private mirrorBase = ''
+  private modelSource: TtsModelSource | null = null
+  private prepareController: AbortController | null = null
   private session: InferenceSession | null = null
   private phonemizeModule: PiperPhonemizeModule | null = null
   private phonemizeQueue: Promise<unknown> = Promise.resolve()
@@ -96,15 +107,23 @@ export class PiperEngine implements TtsEngine {
     return this.voice?.id ?? ''
   }
 
+  /** Where the current voice model came from (cache / mirror / app origin). */
+  getModelSource(): TtsModelSource | null {
+    return this.modelSource
+  }
+
   setVoiceId(voiceId: string): void {
     if (voiceId === this.voice?.id) {
       return
     }
     this.options.voiceId = voiceId
+    this.prepareController?.abort()
+    this.prepareController = null
     this.session?.release()
     this.session = null
     this.config = null
     this.voice = null
+    this.modelSource = null
     this.status = 'idle'
     this.cache.clear()
   }
@@ -126,6 +145,9 @@ export class PiperEngine implements TtsEngine {
 
   private async prepareInternal(onProgress?: (progress: TtsProgress) => void): Promise<void> {
     this.status = 'preparing'
+    const controller = new AbortController()
+    this.prepareController = controller
+
     try {
       const ort = await loadOrt()
       onProgress?.({
@@ -137,22 +159,29 @@ export class PiperEngine implements TtsEngine {
       })
 
       if (this.voices.length === 0) {
-        this.voices = await loadVoiceManifest()
+        const manifest = await loadVoiceManifest()
+        this.voices = manifest.voices
+        this.mirrorBase = resolveMirrorBase(manifest)
       }
       if (this.voices.length === 0) {
         throw new Error('未找到本地语音模型，请先运行 npm run tts:setup。')
       }
 
       const voice =
-        this.voices.find((entry) => entry.id === this.options.voiceId) ?? this.voices[0]
+        this.voices.find((entry) => entry.id === this.options.voiceId) ??
+        this.voices.find((entry) => entry.id === DEFAULT_VOICE_ID) ??
+        this.voices[0]
       this.voice = voice
 
       const config = await loadVoiceConfig(voice)
       this.config = config
 
       if (!this.session) {
-        const modelBuffer = await fetchVoiceModel(voice, onProgress)
-        this.session = await ort.InferenceSession.create(modelBuffer, {
+        const buffer = await this.loadModel(voice, onProgress, controller.signal)
+        if (controller.signal.aborted) {
+          throw new TtsCanceledError()
+        }
+        this.session = await ort.InferenceSession.create(buffer, {
           executionProviders: ['wasm'],
         })
       }
@@ -165,8 +194,48 @@ export class PiperEngine implements TtsEngine {
       onProgress?.({ stage: 'voice', loaded: 1, total: 1, ratio: 1, message: '语音已就绪' })
     } catch (error) {
       this.status = 'error'
+      if (error instanceof TtsCanceledError) {
+        throw error
+      }
       throw error instanceof Error ? error : new Error('本地语音引擎初始化失败。')
+    } finally {
+      if (this.prepareController === controller) {
+        this.prepareController = null
+      }
     }
+  }
+
+  /**
+   * Cache → mirror → app origin. The cache keeps repeat visits instant because
+   * the mirror's signed redirect is not cacheable by the browser.
+   */
+  private async loadModel(
+    voice: PiperVoiceEntry,
+    onProgress?: (progress: TtsProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<ArrayBuffer> {
+    const cached = await readCachedModel(voice)
+    if (cached) {
+      this.modelSource = 'cache'
+      onProgress?.({
+        stage: 'model',
+        loaded: cached.byteLength,
+        total: cached.byteLength,
+        ratio: 1,
+        message: '使用本地缓存的语音模型',
+        source: 'cache',
+      })
+      return cached
+    }
+
+    const { buffer, source } = await fetchVoiceModel(voice, {
+      mirrorBase: this.mirrorBase,
+      onProgress,
+      signal,
+    })
+    this.modelSource = source
+    void requestPersistentStorage().then(() => writeCachedModel(voice, buffer))
+    return buffer
   }
 
   private async createPhonemizeModule(): Promise<PiperPhonemizeModule> {
@@ -394,11 +463,14 @@ export class PiperEngine implements TtsEngine {
 
   dispose(): void {
     this.cancel()
+    this.prepareController?.abort()
+    this.prepareController = null
     this.session?.release()
     this.session = null
     this.phonemizeModule = null
     this.cache.clear()
     this.audio = null
+    this.modelSource = null
     this.status = 'idle'
   }
 }

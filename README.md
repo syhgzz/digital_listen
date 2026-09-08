@@ -21,29 +21,47 @@
 2. **在线语音引擎**（可选，配置 `VITE_REMOTE_TTS_ENDPOINT` 后才会出现）
 3. **系统语音**（兜底；只会选择 `en-*` 语音，绝不会使用中文等非英文默认语音）
 
+### 语音模型从哪里加载
+
+单条声线约 60MB，加载顺序为：
+
+1. **浏览器 OPFS 缓存**（`tts-model/`）——命中则零网络，刷新页面秒开
+2. **HF 镜像站**（默认 `https://hf-mirror.com/diffusionstudio/piper-voices/resolve/main`）——离服务器远的客户端更快
+3. **本站 `/tts/voices/`**——镜像被墙/超时/字节数不符时自动兜底
+
+镜像下载完成后会写入 OPFS，因此第二次访问不再下载（镜像的签名跳转无法被浏览器 HTTP 缓存复用）。
+来源会显示在「语音设置」的状态标签上（`就绪 · 镜像站` / `本地缓存` / `服务器`）。
+
 ## 准备语音资源
 
 ```bash
-npm install          # 自动复制 ONNX Runtime / Piper 的 WASM 运行时到 public/tts
-npm run tts:setup    # 下载约 60MB 的英文语音模型到 public/tts/voices
+npm install          # 自动复制 Piper 的 WASM 运行时到 public/tts
+npm run tts:setup    # 下载默认的 6 条英文声线（约 360MB）到 public/tts/voices
 npm run dev
 ```
 
+默认声线：
+
+| voiceId | 显示名 |
+| --- | --- |
+| `en_US-lessac-medium` | Lessac（美音·女声）· 默认 |
+| `en_US-hfc_female-medium` | HFC Female（美音·女声） |
+| `en_US-hfc_male-medium` | HFC Male（美音·男声） |
+| `en_US-ryan-medium` | Ryan（美音·男声） |
+| `en_GB-jenny_dioco-medium` | Jenny（英音·女声） |
+| `en_GB-alan-medium` | Alan（英音·男声） |
+
 - 语音资源位于 `public/tts/`，已在 `.gitignore` 中忽略，不需要提交到仓库。
-- `npm run tts:setup` 依次尝试 `VITE_TTS_MODEL_BASE` → HuggingFace → `hf-mirror.com`；
-  国内网络可显式指定镜像，例如：
+- `npm run tts:setup` 下载时依次尝试 `VITE_TTS_MODEL_BASE` → `VITE_TTS_MIRROR_BASE` → HuggingFace → `hf-mirror.com`。
+- 增删声线（manifest 会按目录内容自动重建，UI 立即生效）：
 
   ```bash
-  VITE_TTS_MODEL_BASE=https://hf-mirror.com/diffusionstudio/piper-voices/resolve/main npm run tts:setup
+  node scripts/tts-assets.mjs --voice en_US-amy-medium          # 只下这一条
+  node scripts/tts-assets.mjs --voices en_US-amy-medium,en_GB-alan-medium
+  node scripts/tts-assets.mjs --defaults                        # 补齐默认清单
   ```
 
-- 想换音色或增加音色：
-
-  ```bash
-  node scripts/tts-assets.mjs --voice en_US-hfc_female-medium
-  ```
-
-  新增的音色会写入 `public/tts/voices/manifest.json`，并在「语音设置」下拉框中出现。
+  磁盘占用按每条约 60MB 估算；`public/tts` 与 `dist/` 各存一份。
 
 ## 快捷键
 
@@ -57,6 +75,12 @@ npm run dev
 ```bash
 VITE_REMOTE_TTS_ENDPOINT=http://127.0.0.1:5000/speak   # 可选在线语音引擎
 VITE_REMOTE_TTS_TIMEOUT_MS=10000
+
+VITE_TTS_MIRROR_BASE=https://hf-mirror.com/diffusionstudio/piper-voices/resolve/main
+# 置空即关闭镜像优先，只从本站加载：VITE_TTS_MIRROR_BASE=
+
+VITE_TTS_MODEL_BASE=https://hf-mirror.com/diffusionstudio/piper-voices/resolve/main
+# 仅影响 npm run tts:setup 在服务器侧下载模型时的首选地址
 ```
 
 请求方式为 `POST` JSON：

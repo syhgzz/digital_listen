@@ -10,7 +10,7 @@
     "prebuild": "node scripts/tts-assets.mjs --runtime",
     "preview": "vite preview",
     "tts:runtime": "node scripts/tts-assets.mjs --runtime",
-    "tts:setup": "node scripts/tts-assets.mjs --runtime --voice en_US-lessac-medium",
+    "tts:setup": "node scripts/tts-assets.mjs --runtime --defaults",
     "test": "vitest run"
   },
   "dependencies": {

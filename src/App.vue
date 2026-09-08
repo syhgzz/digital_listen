@@ -16,6 +16,7 @@ const {
   error: ttsError,
   hasLocalVoice,
   isPreparing,
+  modelSource,
   needsGesture,
   notice,
   prepareProgress,
@@ -84,6 +85,7 @@ onMounted(() => {
         :error="ttsError"
         :has-local-voice="hasLocalVoice"
         :can-test="voiceOptions.length > 0"
+        :model-source="modelSource"
         @update:selected-voice-key="selectedVoiceKey = $event"
         @update:rate-preset="selectedRatePreset = $event"
         @test="testVoice"

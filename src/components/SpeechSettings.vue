@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { SpeechRatePreset } from '../types/practice'
-import type { TtsEngineStatus, TtsProgress, TtsVoiceOption } from '../tts/types'
+import type { TtsEngineStatus, TtsModelSource, TtsProgress, TtsVoiceOption } from '../tts/types'
 
 const props = defineProps<{
   voiceOptions: TtsVoiceOption[]
@@ -13,6 +13,7 @@ const props = defineProps<{
   error: string
   hasLocalVoice: boolean
   canTest: boolean
+  modelSource: TtsModelSource | null
 }>()
 
 const emit = defineEmits<{
@@ -46,12 +47,21 @@ const groupedOptions = computed(() => {
   return [...groups.entries()].map(([group, options]) => ({ group, options }))
 })
 
+const SOURCE_LABELS: Record<TtsModelSource, string> = {
+  cache: '本地缓存',
+  mirror: '镜像站',
+  server: '服务器',
+}
+
 const statusText = computed(() => {
   if (props.isPreparing) {
-    const percent = Math.round((props.prepareProgress?.ratio ?? 0) * 100)
-    return `准备中 ${percent}%`
+    return props.prepareProgress?.message ?? '准备中…'
   }
-  return STATUS_LABELS[props.engineStatus]
+  const base = STATUS_LABELS[props.engineStatus]
+  if (props.engineStatus === 'ready' && props.modelSource) {
+    return `${base} · ${SOURCE_LABELS[props.modelSource]}`
+  }
+  return base
 })
 
 const showSetupHint = computed(
