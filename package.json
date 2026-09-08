@@ -5,10 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "predev": "node scripts/tts-assets.mjs --runtime",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "prebuild": "node scripts/tts-assets.mjs --runtime",
+    "preview": "vite preview",
+    "tts:runtime": "node scripts/tts-assets.mjs --runtime",
+    "tts:setup": "node scripts/tts-assets.mjs --runtime --voice en_US-lessac-medium",
+    "test": "vitest run"
   },
   "dependencies": {
+    "@diffusionstudio/piper-wasm": "^1.0.0",
+    "onnxruntime-web": "^1.29.0",
     "vue": "^3.5.32"
   },
   "devDependencies": {
@@ -17,6 +24,7 @@
     "@vue/tsconfig": "^0.9.1",
     "typescript": "~6.0.2",
     "vite": "^8.0.4",
+    "vitest": "^3.2.7",
     "vue-tsc": "^3.2.6"
   }
 }
