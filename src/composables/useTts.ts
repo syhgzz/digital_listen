@@ -1,378 +1,320 @@
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { SpeechRatePreset } from '../types/practice'
+import { createTtsEngines, type TtsEngines } from '../tts'
+import {
+  AUTO_VOICE_KEY,
+  TtsCanceledError,
+  isCanceledError,
+  isPlaybackBlockedError,
+  type TtsEngine,
+  type TtsEngineId,
+  type TtsEngineStatus,
+  type TtsProgress,
+  type TtsVoiceOption,
+} from '../tts/types'
 
-interface HttpTtsEngineOptions {
-  enabled?: boolean
-  endpoint?: string
-  timeoutMs?: number
-}
-
-interface UseTtsOptions {
-  langPrefix?: string
-  maxVoices?: number
-  initialVoiceURI?: string
+export interface UseTtsOptions {
+  initialVoiceKey?: string
   initialRatePreset?: SpeechRatePreset
-  localEngine?: HttpTtsEngineOptions
-  onlineEngine?: HttpTtsEngineOptions
 }
 
-export type TtsEngineSource = 'os' | 'local' | 'online' | 'none'
-
-export const SYSTEM_DEFAULT_VOICE_ID = '__system_default__'
-export const LOCAL_ENGINE_ID = '__local_engine__'
-export const ONLINE_ENGINE_ID = '__online_engine__'
-
-export interface VoiceOption {
-  id: string
-  name: string
-  lang: string
-  source: TtsEngineSource
-  sourceLabel: string
-}
-
-const NATURAL_VOICE_KEYWORDS = ['natural', 'neural', 'premium', 'enhanced', 'siri']
-const DEFAULT_HTTP_TIMEOUT_MS = 10_000
-
-const speechRateByPreset: Record<SpeechRatePreset, number> = {
+export const speechRateByPreset: Record<SpeechRatePreset, number> = {
   normal: 1,
   slightlyFast: 1.2,
   fastest: 1.4,
 }
 
-const isSpeechSynthesisAvailable = (): boolean =>
-  typeof window !== 'undefined' &&
-  'speechSynthesis' in window &&
-  'SpeechSynthesisUtterance' in window
-
-const parseBooleanFlag = (value: string | undefined): boolean =>
-  value === '1' || value?.toLowerCase() === 'true'
-
-const getVoicePriority = (voice: SpeechSynthesisVoice): number => {
-  const name = voice.name.toLowerCase()
-  const keywordScore = NATURAL_VOICE_KEYWORDS.some((keyword) => name.includes(keyword)) ? 4 : 0
-  const defaultScore = voice.default ? 2 : 0
-  const googleScore = name.includes('google') ? 1 : 0
-  return keywordScore + defaultScore + googleScore
+interface TtsDebugState {
+  activeEngineId: TtsEngineId | null
+  lastText: string
+  lastClipDurationMs: number
+  lastClipRms: number
+  engineStatus: TtsEngineStatus
 }
 
-const normalizeHttpEngineOptions = (
-  explicit: HttpTtsEngineOptions | undefined,
-  envEnabled: string | undefined,
-  envEndpoint: string | undefined,
-): Required<HttpTtsEngineOptions> => ({
-  enabled: explicit?.enabled ?? parseBooleanFlag(envEnabled),
-  endpoint: explicit?.endpoint ?? envEndpoint ?? '',
-  timeoutMs: explicit?.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
-})
+declare global {
+  interface Window {
+    __ttsDebug?: TtsDebugState
+  }
+}
+
+const TEST_SENTENCE = 'This is the listening voice.'
 
 export const useTts = (options: UseTtsOptions = {}) => {
-  const osSupported = isSpeechSynthesisAvailable()
-  const selectedVoiceURI = ref(options.initialVoiceURI ?? '')
+  const selectedVoiceKey = ref(options.initialVoiceKey ?? AUTO_VOICE_KEY)
   const selectedRatePreset = ref<SpeechRatePreset>(options.initialRatePreset ?? 'normal')
-  const allVoices = ref<SpeechSynthesisVoice[]>([])
+  const voiceOptions = ref<TtsVoiceOption[]>([])
   const speaking = ref(false)
-  const ttsError = ref('')
-  const activeEngineSource = ref<TtsEngineSource>('none')
-  const requestController = ref<AbortController | null>(null)
-  let speakGeneration = 0
+  const error = ref('')
+  const notice = ref('')
+  const prepareProgress = ref<TtsProgress | null>(null)
+  const isPreparing = ref(false)
+  const needsGesture = ref(false)
+  const activeEngineId = ref<TtsEngineId | null>(null)
+  const engineStatus = ref<TtsEngineStatus>('idle')
 
-  const localEngine = normalizeHttpEngineOptions(
-    options.localEngine,
-    import.meta.env.VITE_LOCAL_TTS_ENABLED,
-    import.meta.env.VITE_LOCAL_TTS_ENDPOINT,
-  )
-  const onlineEngine = normalizeHttpEngineOptions(
-    options.onlineEngine,
-    import.meta.env.VITE_ONLINE_TTS_ENABLED,
-    import.meta.env.VITE_ONLINE_TTS_ENDPOINT,
-  )
-
-  const voicePrefix = (options.langPrefix ?? 'en-US').toLowerCase()
-  const maxVoices = options.maxVoices ?? 5
-  const anyEngineConfigured = computed(
-    () => osSupported || localEngine.enabled || onlineEngine.enabled,
-  )
-
-  const availableVoices = computed(() =>
-    [...allVoices.value]
-      .filter((voice) => voice.lang.toLowerCase().startsWith(voicePrefix))
-      .sort((left, right) => {
-        const priorityDiff = getVoicePriority(right) - getVoicePriority(left)
-        if (priorityDiff !== 0) {
-          return priorityDiff
+  const engines: TtsEngines = createTtsEngines({
+    onDebugClip: ({ text, durationMs, rms }) => {
+      if (import.meta.env.DEV) {
+        window.__ttsDebug = {
+          ...(window.__ttsDebug ?? {
+            activeEngineId: null,
+            engineStatus: 'idle',
+            lastText: '',
+            lastClipDurationMs: 0,
+            lastClipRms: 0,
+          }),
+          activeEngineId: activeEngineId.value,
+          lastText: text,
+          lastClipDurationMs: durationMs,
+          lastClipRms: rms,
         }
-        return left.name.localeCompare(right.name)
-      })
-      .slice(0, maxVoices),
-  )
-
-  const allVoiceOptions = computed<VoiceOption[]>(() => {
-    const sourceLabel = (source: TtsEngineSource) => {
-      if (source === 'os') return '操作系统'
-      if (source === 'local') return '本地开源'
-      return '在线'
-    }
-    const options: VoiceOption[] = []
-
-    if (osSupported) {
-      const defaultVoice = allVoices.value.find((v) => v.default)
-      const defaultName = defaultVoice ? `系统默认语音（${defaultVoice.name}）` : '系统默认语音'
-      options.push({
-        id: SYSTEM_DEFAULT_VOICE_ID,
-        name: defaultName,
-        lang: defaultVoice?.lang ?? '—',
-        source: 'os',
-        sourceLabel: '系统默认',
-      })
-
-      const allowedPrefixes = ['en-us', 'en-gb', 'zh-cn']
-      const sortedOsVoices = [...allVoices.value]
-        .filter((voice) => allowedPrefixes.some((p) => voice.lang.toLowerCase().startsWith(p)))
-        .sort((left, right) => {
-          const priorityDiff = getVoicePriority(right) - getVoicePriority(left)
-          if (priorityDiff !== 0) {
-            return priorityDiff
-          }
-          return left.name.localeCompare(right.name)
-        })
-        .slice(0, maxVoices)
-
-      for (const voice of sortedOsVoices) {
-        options.push({
-          id: voice.voiceURI,
-          name: voice.name,
-          lang: voice.lang,
-          source: 'os',
-          sourceLabel: sourceLabel('os'),
-        })
-      }
-    }
-
-    if (localEngine.enabled) {
-      options.push({
-        id: LOCAL_ENGINE_ID,
-        name: '本地开源引擎',
-        lang: 'en-US',
-        source: 'local',
-        sourceLabel: sourceLabel('local'),
-      })
-    }
-
-    if (onlineEngine.enabled) {
-      options.push({
-        id: ONLINE_ENGINE_ID,
-        name: '在线引擎',
-        lang: 'en-US',
-        source: 'online',
-        sourceLabel: sourceLabel('online'),
-      })
-    }
-
-    return options
-  })
-
-  const updateVoiceList = () => {
-    if (!osSupported) {
-      return
-    }
-    allVoices.value = window.speechSynthesis.getVoices()
-  }
-
-  watch(
-    allVoiceOptions,
-    (options) => {
-      if (options.length === 0) {
-        return
-      }
-
-      if (selectedVoiceURI.value === SYSTEM_DEFAULT_VOICE_ID) {
-        return
-      }
-      const isCurrentStillAvailable = options.some((opt) => opt.id === selectedVoiceURI.value)
-      if (!isCurrentStillAvailable) {
-        selectedVoiceURI.value = options[0].id
       }
     },
-    { immediate: true },
-  )
+  })
 
-  const stop = () => {
-    requestController.value?.abort()
-    requestController.value = null
+  let speakGeneration = 0
+  let pendingGestureText: string | null = null
+  let disposed = false
 
-    if (osSupported) {
-      window.speechSynthesis.cancel()
+  const rate = computed(() => speechRateByPreset[selectedRatePreset.value])
+  const hasLocalVoice = ref(false)
+
+  const selectedOption = computed<TtsVoiceOption>(() => {
+    const found = voiceOptions.value.find((option) => option.key === selectedVoiceKey.value)
+    return (
+      found ??
+      voiceOptions.value.find((option) => option.key === AUTO_VOICE_KEY) ?? {
+        key: AUTO_VOICE_KEY,
+        engineId: 'piper',
+        label: '自动（本地语音优先）',
+        group: '本地引擎',
+        available: false,
+      }
+    )
+  })
+
+  const buildVoiceOptions = () => {
+    const list: TtsVoiceOption[] = []
+
+    list.push({
+      key: AUTO_VOICE_KEY,
+      engineId: 'piper',
+      label: '自动（本地语音优先）',
+      group: '本地引擎',
+      available: engines.piper.getStatus() !== 'unavailable',
+    })
+
+    for (const voice of engines.piper.getVoices()) {
+      list.push({
+        key: `piper:${voice.id}`,
+        engineId: 'piper',
+        voiceId: voice.id,
+        label: `${voice.name}（${voice.quality}）`,
+        group: '本地引擎',
+        available: true,
+      })
     }
 
+    for (const voice of engines.system.getVoices()) {
+      list.push({
+        key: `system:${voice.voiceURI}`,
+        engineId: 'system',
+        voiceId: voice.voiceURI,
+        label: `${voice.name}（${voice.lang}）`,
+        group: '系统语音',
+        available: true,
+      })
+    }
+
+    if (engines.remote.isConfigured()) {
+      list.push({
+        key: 'remote:',
+        engineId: 'remote',
+        label: '在线语音引擎',
+        group: '在线引擎',
+        available: engines.remote.getStatus() !== 'unavailable',
+      })
+    }
+
+    voiceOptions.value = list
+    hasLocalVoice.value = engines.piper.getVoices().length > 0
+    if (!list.some((option) => option.key === selectedVoiceKey.value)) {
+      selectedVoiceKey.value = AUTO_VOICE_KEY
+    }
+  }
+
+  const engineForOption = (option: TtsVoiceOption): TtsEngine => {
+    if (option.engineId === 'system') {
+      return engines.system
+    }
+    if (option.engineId === 'remote') {
+      return engines.remote
+    }
+    return engines.piper
+  }
+
+  const applyVoiceSelection = (option: TtsVoiceOption) => {
+    if (option.engineId === 'piper' && option.voiceId) {
+      engines.piper.setVoiceId(option.voiceId)
+    }
+    if (option.engineId === 'system' && option.voiceId) {
+      engines.system.setVoiceURI(option.voiceId)
+    }
+  }
+
+  const syncStatus = () => {
+    const status = engineForOption(selectedOption.value).getStatus()
+    engineStatus.value = status
+    if (import.meta.env.DEV) {
+      window.__ttsDebug = {
+        ...(window.__ttsDebug ?? { activeEngineId: null, lastText: '', lastClipDurationMs: 0, lastClipRms: 0, engineStatus: status }),
+        activeEngineId: activeEngineId.value,
+        engineStatus: status,
+      }
+    }
+  }
+
+  const prepare = async (): Promise<void> => {
+    if (disposed) {
+      return
+    }
+    isPreparing.value = true
+    error.value = ''
+    try {
+      await engines.piper.prepare((progress) => {
+        prepareProgress.value = progress
+      })
+    } catch (piperError) {
+      error.value = piperError instanceof Error ? piperError.message : '本地语音引擎不可用。'
+    }
+    try {
+      await engines.system.prepare()
+    } catch {
+      // System voices are optional; the local engine is the primary one.
+    }
+    prepareProgress.value = null
+    isPreparing.value = false
+    buildVoiceOptions()
+    syncStatus()
+  }
+
+  const stop = () => {
+    speakGeneration += 1
+    pendingGestureText = null
+    for (const engine of engines.chain) {
+      engine.cancel()
+    }
     speaking.value = false
   }
 
-  const ensureVoicesReady = async () => {
-    if (selectedVoiceURI.value !== SYSTEM_DEFAULT_VOICE_ID) return
-    if (allVoices.value.length > 0) return
-    if (!osSupported) return
-    updateVoiceList()
-    if (allVoices.value.length > 0) return
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(resolve, 3000)
-      const handler = () => {
-        clearTimeout(timeout)
-        window.speechSynthesis.removeEventListener('voiceschanged', handler)
-        updateVoiceList()
-        resolve()
-      }
-      window.speechSynthesis.addEventListener('voiceschanged', handler)
-    })
-  }
-
-  const speakWithOsEngine = async (text: string) => {
-    if (!osSupported) {
-      throw new Error('操作系统内部语音引擎不可用。')
-    }
-    await ensureVoicesReady()
-
-    return new Promise<void>((resolve, reject) => {
-      const utterance = new SpeechSynthesisUtterance(text)
-      utterance.lang = 'en-US'
-
-      const targetUri = selectedVoiceURI.value === SYSTEM_DEFAULT_VOICE_ID
-        ? allVoices.value.find((v) => v.default)?.voiceURI ?? ''
-        : selectedVoiceURI.value
-      const selectedVoice = allVoices.value.find((v) => v.voiceURI === targetUri)
-      if (selectedVoice) {
-        utterance.voice = selectedVoice
-      }
-      utterance.rate = speechRateByPreset[selectedRatePreset.value]
-
-      utterance.onstart = () => {
-        speaking.value = true
-      }
-      utterance.onend = () => {
-        speaking.value = false
-        resolve()
-      }
-      utterance.onerror = (event) => {
-        speaking.value = false
-        if (event.error === 'interrupted' || event.error === 'canceled') {
-          resolve()
-          return
-        }
-        reject(new Error(`操作系统语音播放失败：${event.error}`))
-      }
-
-      window.speechSynthesis.speak(utterance)
-    })
-  }
-
-  const speakWithHttpEngine = async (
-    source: 'local' | 'online',
-    engine: Required<HttpTtsEngineOptions>,
-    text: string,
-  ) => {
-    if (!engine.enabled) {
-      throw new Error(`${source === 'local' ? '本地开源' : '在线'}语音引擎未启用。`)
-    }
-    if (!engine.endpoint) {
-      throw new Error(`${source === 'local' ? '本地开源' : '在线'}语音引擎未配置 endpoint。`)
-    }
-
-    const controller = new AbortController()
-    requestController.value = controller
-    const timeoutId = window.setTimeout(() => controller.abort(), engine.timeoutMs)
-
-    speaking.value = true
-    try {
-      const response = await fetch(engine.endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text,
-          lang: 'en-US',
-          ratePreset: selectedRatePreset.value,
-          rate: speechRateByPreset[selectedRatePreset.value],
-        }),
-        signal: controller.signal,
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
-      }
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error(`${source === 'local' ? '本地开源' : '在线'}语音引擎请求超时或已取消。`)
-      }
-      if (error instanceof Error) {
-        throw new Error(`${source === 'local' ? '本地开源' : '在线'}语音引擎失败：${error.message}`)
-      }
-      throw new Error(`${source === 'local' ? '本地开源' : '在线'}语音引擎发生未知错误。`)
-    } finally {
-      window.clearTimeout(timeoutId)
-      if (requestController.value === controller) {
-        requestController.value = null
-      }
-      speaking.value = false
-    }
-  }
-
-  const speak = async (text: string) => {
-    const trimmedText = text.trim()
-    if (!trimmedText) {
-      ttsError.value = '朗读文本不能为空。'
+  const speak = async (text: string): Promise<void> => {
+    const trimmed = text.trim()
+    if (!trimmed) {
+      error.value = '朗读文本不能为空。'
       return
     }
 
-    ttsError.value = ''
-    stop()
+    const generation = ++speakGeneration
+    error.value = ''
+    notice.value = ''
+    const option = selectedOption.value
+    applyVoiceSelection(option)
 
-    const gen = ++speakGeneration
-    const selectedOption = allVoiceOptions.value.find((opt) => opt.id === selectedVoiceURI.value)
+    const primary = engineForOption(option)
+    const chain = [primary, ...engines.chain.filter((engine) => engine !== primary)]
 
-    try {
-      if (!selectedOption) {
-        throw new Error('未选择语音引擎。')
+    let lastError = ''
+    for (const engine of chain) {
+      if (generation !== speakGeneration) {
+        return
       }
-
-      if (selectedOption.source === 'os') {
-        await speakWithOsEngine(trimmedText)
-      } else if (selectedOption.source === 'local') {
-        await speakWithHttpEngine('local', localEngine, trimmedText)
-      } else {
-        await speakWithHttpEngine('online', onlineEngine, trimmedText)
+      activeEngineId.value = engine.id
+      try {
+        await engine.speak(trimmed, {
+          rate: rate.value,
+          onStart: () => {
+            speaking.value = true
+          },
+          onEnd: () => {
+            speaking.value = false
+          },
+        })
+        if (generation !== speakGeneration) {
+          return
+        }
+        speaking.value = false
+        if (engine !== primary) {
+          notice.value = `已自动切换到${engine.label}。`
+        }
+        syncStatus()
+        return
+      } catch (speakError) {
+        if (speakError instanceof TtsCanceledError || isCanceledError(speakError) || generation !== speakGeneration) {
+          return
+        }
+        if (isPlaybackBlockedError(speakError)) {
+          speaking.value = false
+          needsGesture.value = true
+          pendingGestureText = trimmed
+          return
+        }
+        speaking.value = false
+        lastError = speakError instanceof Error ? speakError.message : '语音播放失败。'
+        syncStatus()
       }
-      if (gen !== speakGeneration) return
-      activeEngineSource.value = selectedOption.source
-    } catch (error) {
-      if (gen !== speakGeneration) return
-      activeEngineSource.value = 'none'
-      ttsError.value = error instanceof Error ? error.message : '语音播放失败。'
     }
+
+    error.value = lastError || '语音播放失败。'
+  }
+
+  const retryPendingAfterGesture = () => {
+    if (!needsGesture.value || !pendingGestureText) {
+      return
+    }
+    const text = pendingGestureText
+    pendingGestureText = null
+    needsGesture.value = false
+    void speak(text)
+  }
+
+  const testVoice = async (): Promise<void> => {
+    await speak(TEST_SENTENCE)
   }
 
   onMounted(() => {
-    if (!osSupported) {
-      return
-    }
-    updateVoiceList()
-    window.speechSynthesis.addEventListener('voiceschanged', updateVoiceList)
+    window.addEventListener('pointerdown', retryPendingAfterGesture, true)
+    window.addEventListener('keydown', retryPendingAfterGesture, true)
+    void prepare()
   })
 
   onUnmounted(() => {
-    if (osSupported) {
-      window.speechSynthesis.removeEventListener('voiceschanged', updateVoiceList)
-    }
+    disposed = true
+    window.removeEventListener('pointerdown', retryPendingAfterGesture, true)
+    window.removeEventListener('keydown', retryPendingAfterGesture, true)
     stop()
+    engines.piper.dispose()
+    engines.system.dispose()
+    engines.remote.dispose()
   })
 
   return {
-    activeEngineSource,
-    allVoiceOptions,
-    anyEngineConfigured,
-    availableVoices,
+    activeEngineId,
+    engineStatus,
+    error,
+    hasLocalVoice,
+    isPreparing,
+    needsGesture,
+    notice,
+    prepare,
+    prepareProgress,
+    rate,
     selectedRatePreset,
-    selectedVoiceURI,
-    speaking,
-    ttsError,
+    selectedVoiceKey,
     speak,
+    speaking,
     stop,
+    testVoice,
+    voiceOptions,
   }
 }
