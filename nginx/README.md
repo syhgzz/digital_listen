@@ -3,7 +3,30 @@
 配置文件：`nginx/digital-listen.conf`，监听端口 **53002**，静态托管 `dist/`（Vite 构建产物，
 已包含 `assets/` 与 `public/tts/` 复制过来的语音资源）。
 
-## 部署步骤
+## 一键部署（推荐）
+
+仓库根目录的 `deploy.sh` 把「准备语音资源 → 构建 → 发布 → 装 nginx 配置 → 校验并重载」
+串成一步（幂等，可重复执行）：
+
+```bash
+cd /srv/digital_listen
+sudo ./deploy.sh
+```
+
+常用参数：
+
+```bash
+./deploy.sh --skip-install      # 依赖没变时跳过 npm ci
+./deploy.sh --skip-build        # 只发布已有 dist/
+./deploy.sh --no-nginx          # 只同步文件，不动 nginx
+./deploy.sh --pull              # 部署前 git pull --ff-only
+./deploy.sh --web-root /srv/www/site --port 8080 --conf-dir /etc/nginx/conf.d
+```
+
+脚本行为：`rsync -a --delete --chmod=D755,F644 dist/ <web_root>/`；安装配置前先备份原文件，
+`nginx -t` 失败会自动回滚并终止；配置中的 `root` / `listen` 会按 `--web-root` / `--port` 自动替换。
+
+## 手动部署步骤
 
 ```bash
 # 1. 服务器上准备代码与依赖

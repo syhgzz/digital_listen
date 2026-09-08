@@ -76,14 +76,15 @@ npm run tts:setup  # 重新准备语音资源
 
 ## 部署（nginx）
 
-仓库内附带部署配置 `nginx/digital-listen.conf`（监听 **53002**）与说明 `nginx/README.md`：
+仓库内附带一键部署脚本 `deploy.sh` 与 nginx 配置 `nginx/digital-listen.conf`
+（监听 **53002**，发布目录 `/var/www/digital_listen_dsh41f`）：
 
 ```bash
-npm run build
-sudo rsync -a --delete dist/ /var/www/digital_listen_dsh41f/
-sudo cp nginx/digital-listen.conf /etc/nginx/conf.d/
-sudo nginx -t && sudo systemctl reload nginx
+cd /srv/digital_listen
+sudo ./deploy.sh          # 准备语音资源 → 构建 → 发布 → 装配置 → nginx -t 校验并重载
 ```
+
+手动方式与参数说明见 `nginx/README.md`。
 
 配置要点：`assets/` 与语音模型长期缓存、`manifest.json`/Piper 运行时每次校验、
 gzip 压缩 wasm、COOP/COEP 开启 ONNX Runtime 多线程，详见 `nginx/README.md`。
