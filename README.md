@@ -25,18 +25,34 @@
 
 ### 语音模型从哪里加载
 
-单条声线约 60MB，加载顺序为：
+单条声线约 60MB。**镜像站与本站会同时开始下载**，5 秒后比较各自已收到的字节数，谁快用谁、
+另一个立即中止——不预设哪个更快，也不会为一个连不上的镜像白等 10 秒：
 
-1. **浏览器 OPFS 缓存**（`tts-model/`）——命中则零网络，刷新页面秒开
-2. **HF 镜像站**（默认 `https://hf-mirror.com/diffusionstudio/piper-voices/resolve/main`）——离服务器远的客户端更快
-3. **本站 `/tts/voices/`**——镜像被墙/超时/字节数不符时自动兜底（连续 10 秒无数据即放弃）
+1. **浏览器缓存**（命中则零网络，刷新页面秒开）
+   - HTTPS / localhost：OPFS（`tts-model/`）
+   - 纯 HTTP：IndexedDB（`tts-model-cache`）——非安全上下文里 `navigator.storage` 不存在，
+     OPFS 用不了，没有这个兜底就会每次刷新重新下载 60MB
+2. **HF 镜像站**（默认 `https://hf-mirror.com/diffusionstudio/piper-voices/resolve/main`）
+3. **本站 `/tts/voices/`**
+
+任一来源出错、卡住（连续 10 秒无数据）或字节数与 manifest 不符即被剔除，全部失败才报错。
+来源会显示在「语音设置」的状态标签上（`就绪 · 镜像站` / `本地缓存` / `服务器`）。
 
 > 注意：hf-mirror / aifasthub 等「国内镜像」只镜像元数据，大文件会 302 跳转到 AWS
-> （`cas-bridge.xethub.hf.co` / `us.aws.cdn.hf.co`），国内网络常常连不上，此时会自动回退到本站。
-> 如果镜像在你的网络里不可用，可设 `VITE_TTS_MIRROR_BASE=` 关闭镜像优先，直接从服务器加载。
+> （`cas-bridge.xethub.hf.co`），能不能访问、快不快完全取决于客户端网络，因此不能假设镜像一定更快。
+> 如果镜像在你的网络里不可用，可设 `VITE_TTS_MIRROR_BASE=` 关闭镜像，只从本站加载。
 
-镜像下载完成后会写入 OPFS，因此第二次访问不再下载（镜像的签名跳转无法被浏览器 HTTP 缓存复用）。
-来源会显示在「语音设置」的状态标签上（`就绪 · 镜像站` / `本地缓存` / `服务器`）。
+#### 首次加载慢怎么办
+
+服务器出口带宽通常是硬上限（阿里云按固定带宽计费的实例常见 3–5Mbps；实测 63MB 约 145 秒，
+多连接并发反而更慢），所以「第一次打开慢」多半卡在服务器出口，而不是镜像。两条出路：
+
+1. **加域名 + HTTPS**（`nginx/digital-listen.conf` 里已有注释好的 HTTPS 块）：页面进入安全上下文后
+   OPFS 恢复、`crossOriginIsolated` 为真，ONNX Runtime 可多线程，缓存与初始化都更快；
+2. **把 `public/tts/voices` 放到国内 CDN / 对象存储**（如阿里云 OSS + CDN，需允许跨域读取，
+   并保持 `<language>/<locale>/<name>/<quality>/<voiceId>.onnx` 目录结构），构建时指定
+   `VITE_TTS_MIRROR_BASE=https://<cdn>/piper-voices ./deploy.sh`——代码里的「镜像」是任意 URL，
+   manifest 也会写入同一个值。
 
 > 首次加载在模型下载完成后还需要约 10–60 秒初始化（编译 63MB 模型图 + 加载 18MB 音素数据），
 > 期间状态标签会显示「正在初始化语音引擎…」与已耗时秒数，控制台还会打印各阶段耗时

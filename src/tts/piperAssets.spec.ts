@@ -35,6 +35,48 @@ const binaryResponse = (bytes: number[], status = 200) =>
     headers: { 'content-length': String(bytes.length) },
   })
 
+/** A body that stays open, so the download never completes on its own. */
+const openStreamResponse = (bytes: number[], closeAfterMs?: number) =>
+  new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(bytes))
+        if (closeAfterMs !== undefined) {
+          setTimeout(() => {
+            try {
+              controller.close()
+            } catch {
+              // The reader was cancelled (source lost the race); nothing to do.
+            }
+          }, closeAfterMs)
+        }
+      },
+    }),
+    { status: 200, headers: { 'content-length': String(bytes.length) } },
+  )
+
+/** A body that delivers bytes and then fails, mimicking a dropped connection. */
+const failingStreamResponse = (bytes: number[], errorAfterMs: number) =>
+  new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(bytes))
+        setTimeout(() => {
+          try {
+            controller.error(new Error('连接中断'))
+          } catch {
+            // Already cancelled.
+          }
+        }, errorAfterMs)
+      },
+    }),
+    { status: 200, headers: { 'content-length': String(bytes.length) } },
+  )
+
+/** A body that never produces a byte, mimicking an unreachable mirror. */
+const silentResponse = () =>
+  new Response(new ReadableStream<Uint8Array>({ start() {} }), { status: 200 })
+
 const stubFetch = (
   handler: (url: string, init?: RequestInit) => Response | Promise<Response>,
 ) => {
@@ -124,23 +166,82 @@ describe('defaultVoiceKey / resolveVoiceKey', () => {
 })
 
 describe('fetchVoiceModel', () => {
-  it('uses the mirror and does not touch the server when it succeeds', async () => {
-    const mock = stubFetch((url) => {
-      expect(url).toBe(modelUrl)
-      return binaryResponse([1, 2, 3, 4, 5, 6, 7, 8])
+  it('keeps the mirror when it completes the download first', async () => {
+    const seen: string[] = []
+    stubFetch((url) => {
+      seen.push(url)
+      return url === modelUrl
+        ? binaryResponse([1, 2, 3, 4, 5, 6, 7, 8])
+        : openStreamResponse([1, 2])
     })
 
-    const result = await fetchVoiceModel(voice, { mirrorBase: MIRROR })
+    const result = await fetchVoiceModel(voice, { mirrorBase: MIRROR, raceWindowMs: 50 })
 
     expect(result.source).toBe('mirror')
     expect(result.buffer.byteLength).toBe(8)
-    expect(mock).toHaveBeenCalledTimes(1)
+    // Both sources are started in parallel so the fastest one can be measured.
+    expect(seen).toEqual([modelUrl, serverUrl])
+  })
+
+  it('switches to the app origin when the mirror delivers nothing', async () => {
+    stubFetch((url) => (url === modelUrl ? silentResponse() : binaryResponse([1, 2, 3, 4, 5, 6, 7, 8])))
+
+    const result = await fetchVoiceModel(voice, { mirrorBase: MIRROR, raceWindowMs: 50 })
+
+    expect(result.source).toBe('server')
+    expect(result.buffer.byteLength).toBe(8)
+  })
+
+  it('picks the source with the most bytes when the race window closes', async () => {
+    const shortVoice = { ...voice, sizeBytes: 4 }
+    stubFetch((url) =>
+      url === modelUrl ? openStreamResponse([1, 2], 5_000) : openStreamResponse([1, 2, 3, 4], 40),
+    )
+
+    const result = await fetchVoiceModel(shortVoice, { mirrorBase: MIRROR, raceWindowMs: 20 })
+
+    expect(result.source).toBe('server')
+    expect(result.buffer.byteLength).toBe(4)
+  })
+
+  it('aborts the slower source once the race is decided', async () => {
+    const signals: AbortSignal[] = []
+    stubFetch((url, init) => {
+      if (init?.signal) {
+        signals.push(init.signal)
+      }
+      return url === modelUrl ? binaryResponse([1, 2, 3, 4, 5, 6, 7, 8]) : silentResponse()
+    })
+
+    const result = await fetchVoiceModel(voice, { mirrorBase: MIRROR, raceWindowMs: 50 })
+
+    expect(result.source).toBe('mirror')
+    expect(signals[1]?.aborted).toBe(true)
+  })
+
+  it('retries the other source when the winner fails after the race', async () => {
+    let serverCalls = 0
+    stubFetch((url) => {
+      if (url === modelUrl) {
+        return failingStreamResponse([1, 2, 3, 4], 60)
+      }
+      serverCalls += 1
+      return serverCalls === 1
+        ? openStreamResponse([1, 2], 5_000)
+        : binaryResponse([1, 2, 3, 4, 5, 6, 7, 8])
+    })
+
+    const result = await fetchVoiceModel(voice, { mirrorBase: MIRROR, raceWindowMs: 20 })
+
+    expect(result.source).toBe('server')
+    expect(result.buffer.byteLength).toBe(8)
+    expect(serverCalls).toBe(2)
   })
 
   it('omits the Referer so anti-hotlink mirrors serve the file', async () => {
     const mock = stubFetch(() => binaryResponse([1, 2, 3, 4, 5, 6, 7, 8]))
 
-    await fetchVoiceModel(voice, { mirrorBase: MIRROR })
+    await fetchVoiceModel(voice, { mirrorBase: MIRROR, raceWindowMs: 50 })
 
     const init = mock.mock.calls[0]?.[1] as RequestInit | undefined
     expect(init?.referrerPolicy).toBe('no-referrer')
@@ -155,34 +256,31 @@ describe('fetchVoiceModel', () => {
         : binaryResponse([1, 2, 3, 4, 5, 6, 7, 8])
     })
 
-    const result = await fetchVoiceModel(voice, { mirrorBase: MIRROR })
+    const result = await fetchVoiceModel(voice, { mirrorBase: MIRROR, raceWindowMs: 50 })
 
     expect(result.source).toBe('server')
     expect(seen).toEqual([modelUrl, serverUrl])
   })
 
   it('rejects a mirror response whose byte count does not match the manifest', async () => {
-    const seen: string[] = []
-    stubFetch((url) => {
-      seen.push(url)
+    stubFetch((url) =>
       // A mirror error page that still answers 200 must not be accepted.
-      return url === modelUrl
+      url === modelUrl
         ? binaryResponse([1, 2, 3], 200)
-        : binaryResponse([1, 2, 3, 4, 5, 6, 7, 8])
-    })
+        : binaryResponse([1, 2, 3, 4, 5, 6, 7, 8]),
+    )
 
-    const result = await fetchVoiceModel(voice, { mirrorBase: MIRROR })
+    const result = await fetchVoiceModel(voice, { mirrorBase: MIRROR, raceWindowMs: 50 })
 
     expect(result.source).toBe('server')
-    expect(seen).toEqual([modelUrl, serverUrl])
   })
 
   it('reports both sources when every attempt fails', async () => {
     stubFetch(() => binaryResponse([], 500))
 
-    await expect(fetchVoiceModel(voice, { mirrorBase: MIRROR })).rejects.toThrow(
-      /镜像站：HTTP 500；服务器：HTTP 500/,
-    )
+    await expect(
+      fetchVoiceModel(voice, { mirrorBase: MIRROR, raceWindowMs: 50 }),
+    ).rejects.toThrow(/镜像站：HTTP 500；服务器：HTTP 500/)
   })
 
   it('throws a cancellation error when the caller aborts', async () => {
@@ -203,11 +301,42 @@ describe('fetchVoiceModel', () => {
 
     await fetchVoiceModel(voice, {
       mirrorBase: MIRROR,
+      raceWindowMs: 0,
       onProgress: (item) => progress.push(`${item.source}:${item.message}`),
     })
 
     expect(progress.length).toBeGreaterThan(0)
     expect(progress.every((entry) => entry.startsWith('mirror:从镜像站加载语音模型'))).toBe(true)
+  })
+
+  it('reports progress only for the source that is winning the race', async () => {
+    stubFetch((url) => (url === modelUrl ? binaryResponse([], 404) : binaryResponse([1, 2, 3, 4, 5, 6, 7, 8])))
+    const progress: string[] = []
+
+    const result = await fetchVoiceModel(voice, {
+      mirrorBase: MIRROR,
+      raceWindowMs: 50,
+      onProgress: (item) => progress.push(`${item.source}:${item.message}`),
+    })
+
+    expect(result.source).toBe('server')
+    expect(progress.length).toBeGreaterThan(0)
+    expect(progress.every((entry) => entry.startsWith('server:'))).toBe(true)
+  })
+
+  it('downloads strictly in order when the race window is disabled', async () => {
+    const seen: string[] = []
+    stubFetch((url) => {
+      seen.push(url)
+      return url === modelUrl
+        ? binaryResponse([1, 2, 3, 4, 5, 6, 7, 8])
+        : binaryResponse([], 500)
+    })
+
+    const result = await fetchVoiceModel(voice, { mirrorBase: MIRROR, raceWindowMs: 0 })
+
+    expect(result.source).toBe('mirror')
+    expect(seen).toEqual([modelUrl])
   })
 })
 

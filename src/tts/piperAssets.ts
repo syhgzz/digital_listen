@@ -78,6 +78,11 @@ export interface FetchVoiceModelOptions {
   mirrorBase?: string
   onProgress?: (progress: TtsProgress) => void
   signal?: AbortSignal
+  /**
+   * How long the sources compete before the one with the most bytes wins.
+   * `0` disables the race and downloads the sources strictly in order.
+   */
+  raceWindowMs?: number
 }
 
 export const voiceModelUrl = (voice: PiperVoiceEntry): string =>
@@ -249,16 +254,130 @@ const fetchFromSource = async (
 }
 
 /**
- * Downloads a voice model, trying the mirror first and the app origin second.
- * A source is rejected when it answers with an error, stalls, or delivers a
- * byte count that does not match the manifest (mirrors sometimes answer with
- * an HTML error page).
+ * Sources are started in parallel and the one that has delivered the most bytes
+ * when this window elapses wins. Long enough to cover the mirror's redirect and
+ * its first-byte latency, short enough that an unreachable mirror costs only a
+ * few seconds instead of the full stall timeout.
  */
-export const fetchVoiceModel = async (
+export const DEFAULT_RACE_WINDOW_MS = 5_000
+
+interface DownloadCandidate {
+  source: ModelSource
+  controller: AbortController
+  loaded: number
+  failure: Error | null
+  promise: Promise<ArrayBuffer>
+}
+
+const downloadErrorMessage = (failures: string[]): string =>
+  `语音模型下载失败（${failures.join('；')}）。请检查网络，或在服务器执行 npm run tts:setup。`
+
+const startCandidate = (
+  source: ModelSource,
   voice: PiperVoiceEntry,
-  options: FetchVoiceModelOptions = {},
+  options: FetchVoiceModelOptions,
+  onProgress: (candidate: DownloadCandidate, progress: TtsProgress) => void,
+): DownloadCandidate => {
+  const controller = new AbortController()
+  const forwardAbort = () => controller.abort()
+  options.signal?.addEventListener('abort', forwardAbort, { once: true })
+
+  const candidate: DownloadCandidate = {
+    source,
+    controller,
+    loaded: 0,
+    failure: null,
+    promise: Promise.resolve(new ArrayBuffer(0)),
+  }
+
+  candidate.promise = fetchFromSource(source, voice, {
+    ...options,
+    signal: controller.signal,
+    onProgress: (progress) => {
+      candidate.loaded = progress.loaded
+      onProgress(candidate, progress)
+    },
+  })
+    .then((buffer) => {
+      if (voice.sizeBytes > 0 && buffer.byteLength !== voice.sizeBytes) {
+        throw new Error(`字节数不符（期望 ${voice.sizeBytes}，实际 ${buffer.byteLength}）`)
+      }
+      return buffer
+    })
+    .catch((error: unknown) => {
+      candidate.failure = error instanceof Error ? error : new Error('未知错误')
+      throw candidate.failure
+    })
+    .finally(() => {
+      options.signal?.removeEventListener('abort', forwardAbort)
+    })
+
+  // Losers are rejected on purpose; keep the rejection from surfacing as unhandled.
+  void candidate.promise.catch(() => undefined)
+
+  return candidate
+}
+
+/** Resolves with the winning candidate, or `null` when every source failed. */
+const waitForWinner = (
+  candidates: DownloadCandidate[],
+  raceWindowMs: number,
+): Promise<DownloadCandidate | null> =>
+  new Promise((resolve) => {
+    let decided = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const decide = (winner: DownloadCandidate | null) => {
+      if (decided) {
+        return
+      }
+      decided = true
+      clearTimeout(timer)
+      resolve(winner)
+    }
+
+    const alive = () => candidates.filter((candidate) => !candidate.failure)
+
+    const leader = (): DownloadCandidate | null =>
+      alive().reduce<DownloadCandidate | null>(
+        (best, candidate) => (best === null || candidate.loaded > best.loaded ? candidate : best),
+        null,
+      )
+
+    timer = setTimeout(() => {
+      const fastest = leader()
+      if (fastest && fastest.loaded > 0) {
+        decide(fastest)
+        return
+      }
+      const remaining = alive()
+      if (remaining.length === 1) {
+        decide(remaining[0])
+      }
+      // No source has delivered anything yet: keep waiting, each one still has
+      // its own stall timeout and may yet start producing bytes.
+    }, raceWindowMs)
+
+    for (const candidate of candidates) {
+      candidate.promise.then(
+        () => decide(candidate),
+        () => {
+          const remaining = alive()
+          if (remaining.length === 0) {
+            decide(null)
+          } else if (remaining.length === 1) {
+            decide(remaining[0])
+          }
+        },
+      )
+    }
+  })
+
+const downloadSequentially = async (
+  sources: ModelSource[],
+  voice: PiperVoiceEntry,
+  options: FetchVoiceModelOptions,
 ): Promise<VoiceModelResult> => {
-  const sources = buildModelSources(voice, options.mirrorBase ?? '')
   const failures: string[] = []
 
   for (const source of sources) {
@@ -281,9 +400,95 @@ export const fetchVoiceModel = async (
     }
   }
 
-  throw new Error(
-    `语音模型下载失败（${failures.join('；')}）。请检查网络，或在服务器执行 npm run tts:setup。`,
-  )
+  throw new Error(downloadErrorMessage(failures))
+}
+
+/**
+ * Downloads a voice model from the fastest reachable source.
+ *
+ * The mirror only proxies metadata and 302s the payload to an AWS host, so
+ * whether it is faster than the app origin depends entirely on the client's
+ * network. Instead of assuming, every source is started at once and the one
+ * that has delivered the most bytes after the race window keeps the download;
+ * the rest are aborted. A source that answers with an error, stalls, or
+ * delivers a byte count that does not match the manifest is disqualified
+ * (mirrors sometimes answer with an HTML error page).
+ */
+export const fetchVoiceModel = async (
+  voice: PiperVoiceEntry,
+  options: FetchVoiceModelOptions = {},
+): Promise<VoiceModelResult> => {
+  const sources = buildModelSources(voice, options.mirrorBase ?? '')
+  const raceWindowMs = options.raceWindowMs ?? DEFAULT_RACE_WINDOW_MS
+
+  if (sources.length < 2 || raceWindowMs <= 0) {
+    return downloadSequentially(sources, voice, options)
+  }
+
+  const candidates: DownloadCandidate[] = []
+  let chosen: DownloadCandidate | null = null
+
+  const reportProgress = (candidate: DownloadCandidate, progress: TtsProgress) => {
+    if (chosen) {
+      if (chosen === candidate) {
+        options.onProgress?.(progress)
+      }
+      return
+    }
+    // Still racing: only the leading source may move the progress bar, so the
+    // percentage never jumps back and forth between two downloads.
+    const best = candidates.reduce<DownloadCandidate | null>(
+      (top, item) => (top === null || item.loaded > top.loaded ? item : top),
+      null,
+    )
+    if (best === candidate) {
+      options.onProgress?.(progress)
+    }
+  }
+
+  for (const source of sources) {
+    candidates.push(startCandidate(source, voice, options, reportProgress))
+  }
+
+  const winner = await waitForWinner(candidates, raceWindowMs)
+
+  if (options.signal?.aborted) {
+    throw new TtsCanceledError()
+  }
+  if (!winner) {
+    throw new Error(
+      downloadErrorMessage(
+        candidates.map(
+          (candidate) =>
+            `${sourceLabel(candidate.source.kind)}：${candidate.failure?.message ?? '未知错误'}`,
+        ),
+      ),
+    )
+  }
+
+  chosen = winner
+  for (const candidate of candidates) {
+    if (candidate !== winner) {
+      candidate.controller.abort()
+    }
+  }
+
+  try {
+    const buffer = await winner.promise
+    return { buffer, source: winner.source.kind }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : '未知错误'
+    const others = candidates
+      .filter((candidate) => candidate !== winner)
+      .map((candidate) => candidate.source)
+    if (others.length > 0 && !options.signal?.aborted) {
+      console.warn(
+        `[tts] ${sourceLabel(winner.source.kind)}下载中断（${reason}），改用其他来源重试`,
+      )
+      return downloadSequentially(others, voice, options)
+    }
+    throw new Error(downloadErrorMessage([`${sourceLabel(winner.source.kind)}：${reason}`]))
+  }
 }
 
 let phonemizePromise: Promise<PiperPhonemizeFactory> | null = null
