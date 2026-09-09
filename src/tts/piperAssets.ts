@@ -266,6 +266,8 @@ interface DownloadCandidate {
   controller: AbortController
   loaded: number
   failure: Error | null
+  /** Set when the race decided against this source, so its rejection is expected. */
+  aborted: boolean
   promise: Promise<ArrayBuffer>
 }
 
@@ -287,6 +289,7 @@ const startCandidate = (
     controller,
     loaded: 0,
     failure: null,
+    aborted: false,
     promise: Promise.resolve(new ArrayBuffer(0)),
   }
 
@@ -306,6 +309,13 @@ const startCandidate = (
     })
     .catch((error: unknown) => {
       candidate.failure = error instanceof Error ? error : new Error('未知错误')
+      if (!candidate.aborted && !options.signal?.aborted) {
+        // Keep the "why did it fall back" trail in the console: a source that
+        // loses the race on purpose is silent, one that fails is not.
+        console.warn(
+          `[tts] 语音模型来源不可用（${sourceLabel(source.kind)}）：${candidate.failure.message}`,
+        )
+      }
       throw candidate.failure
     })
     .finally(() => {
@@ -469,6 +479,7 @@ export const fetchVoiceModel = async (
   chosen = winner
   for (const candidate of candidates) {
     if (candidate !== winner) {
+      candidate.aborted = true
       candidate.controller.abort()
     }
   }
