@@ -1,5 +1,4 @@
-export type TtsEngineId = 'piper' | 'remote' | 'system'
-export type TtsEngineKind = 'local' | 'online' | 'system'
+export type TtsEngineId = 'piper' | 'remote'
 export type TtsEngineStatus = 'unavailable' | 'idle' | 'preparing' | 'ready' | 'error'
 export type TtsProgressStage = 'runtime' | 'voice' | 'model' | 'synthesis'
 /** Where a voice model was obtained from. */
@@ -25,7 +24,6 @@ export interface TtsSpeakOptions {
 export interface TtsEngine {
   readonly id: TtsEngineId
   readonly label: string
-  readonly kind: TtsEngineKind
   getStatus(): TtsEngineStatus
   prepare(onProgress?: (progress: TtsProgress) => void): Promise<void>
   speak(text: string, options: TtsSpeakOptions): Promise<void>

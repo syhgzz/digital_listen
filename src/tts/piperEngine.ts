@@ -67,7 +67,6 @@ export interface PiperEngineOptions {
 export class PiperEngine implements TtsEngine {
   readonly id = 'piper' as const
   readonly label = '本地神经语音'
-  readonly kind = 'local' as const
 
   private readonly options: PiperEngineOptions
   private status: TtsEngineStatus = 'idle'

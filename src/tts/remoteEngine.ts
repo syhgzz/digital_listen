@@ -21,7 +21,6 @@ const DEFAULT_TIMEOUT_MS = 10_000
 export class RemoteEngine implements TtsEngine {
   readonly id = 'remote' as const
   readonly label = '在线语音'
-  readonly kind = 'online' as const
 
   private readonly endpoint: string
   private readonly timeoutMs: number

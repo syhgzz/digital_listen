@@ -121,17 +121,6 @@ export const useTts = (options: UseTtsOptions = {}) => {
       })
     }
 
-    for (const voice of engines.system.getVoices()) {
-      list.push({
-        key: `system:${voice.voiceURI}`,
-        engineId: 'system',
-        voiceId: voice.voiceURI,
-        label: `${voice.name}（${voice.lang}）`,
-        group: '系统语音',
-        available: true,
-      })
-    }
-
     if (engines.remote.isConfigured()) {
       list.push({
         key: 'remote:',
@@ -152,9 +141,6 @@ export const useTts = (options: UseTtsOptions = {}) => {
   }
 
   const engineForOption = (option: TtsVoiceOption): TtsEngine => {
-    if (option.engineId === 'system') {
-      return engines.system
-    }
     if (option.engineId === 'remote') {
       return engines.remote
     }
@@ -164,9 +150,6 @@ export const useTts = (options: UseTtsOptions = {}) => {
   const applyVoiceSelection = (option: TtsVoiceOption) => {
     if (option.engineId === 'piper' && option.voiceId) {
       engines.piper.setVoiceId(option.voiceId)
-    }
-    if (option.engineId === 'system' && option.voiceId) {
-      engines.system.setVoiceURI(option.voiceId)
     }
   }
 
@@ -200,18 +183,12 @@ export const useTts = (options: UseTtsOptions = {}) => {
     }
   }
 
-  /** Fetches the (tiny) voice manifest and system voices so the list shows up at once. */
+  /** Fetches the (tiny) voice manifest so the list shows up at once. */
   const loadVoiceList = async (): Promise<void> => {
     if (disposed) {
       return
     }
     await engines.piper.loadVoices().catch(() => [])
-    buildVoiceOptions()
-    try {
-      await engines.system.prepare()
-    } catch {
-      // System voices are optional; the local engine is the primary one.
-    }
     buildVoiceOptions()
     syncStatus()
   }
@@ -226,11 +203,6 @@ export const useTts = (options: UseTtsOptions = {}) => {
       await engines.piper.prepare(handleProgress)
     } catch (piperError) {
       error.value = piperError instanceof Error ? piperError.message : '本地语音引擎不可用。'
-    }
-    try {
-      await engines.system.prepare()
-    } catch {
-      // System voices are optional; the local engine is the primary one.
     }
     if (!speaking.value) {
       prepareProgress.value = null
@@ -275,9 +247,7 @@ export const useTts = (options: UseTtsOptions = {}) => {
         return
       }
       activeEngineId.value = engine.id
-      if (engine.kind !== 'system') {
-        isPreparing.value = true
-      }
+      isPreparing.value = true
       try {
         await engine.speak(trimmed, {
           rate: rate.value,
@@ -353,7 +323,6 @@ export const useTts = (options: UseTtsOptions = {}) => {
     window.removeEventListener('keydown', retryPendingAfterGesture, true)
     stop()
     engines.piper.dispose()
-    engines.system.dispose()
     engines.remote.dispose()
   })
 
