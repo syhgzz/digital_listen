@@ -32,8 +32,12 @@ const binaryResponse = (bytes: number[], status = 200) =>
     headers: { 'content-length': String(bytes.length) },
   })
 
-const stubFetch = (handler: (url: string) => Response | Promise<Response>) => {
-  const mock = vi.fn(async (input: RequestInfo | URL) => handler(String(input)))
+const stubFetch = (
+  handler: (url: string, init?: RequestInit) => Response | Promise<Response>,
+) => {
+  const mock = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => handler(String(input), init),
+  )
   vi.stubGlobal('fetch', mock)
   return mock
 }
@@ -102,6 +106,15 @@ describe('fetchVoiceModel', () => {
     expect(result.source).toBe('mirror')
     expect(result.buffer.byteLength).toBe(8)
     expect(mock).toHaveBeenCalledTimes(1)
+  })
+
+  it('omits the Referer so anti-hotlink mirrors serve the file', async () => {
+    const mock = stubFetch(() => binaryResponse([1, 2, 3, 4, 5, 6, 7, 8]))
+
+    await fetchVoiceModel(voice, { mirrorBase: MIRROR })
+
+    const init = mock.mock.calls[0]?.[1] as RequestInit | undefined
+    expect(init?.referrerPolicy).toBe('no-referrer')
   })
 
   it('falls back to the app origin when the mirror fails', async () => {

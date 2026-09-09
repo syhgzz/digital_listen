@@ -156,7 +156,15 @@ const fetchFromSource = async (
 
   try {
     resetStallTimer()
-    const response = await fetch(source.url, { signal: controller.signal })
+    // `referrerPolicy: 'no-referrer'` is required: hf-mirror.com answers any
+    // request that carries a Referer with an anti-hotlink HTML page (200, no
+    // CORS headers), which the browser turns into a CORS failure. A browser
+    // always sends Referer for cross-origin fetches, while the Node download
+    // script does not - that is why the mirror only worked server-side.
+    const response = await fetch(source.url, {
+      signal: controller.signal,
+      referrerPolicy: 'no-referrer',
+    })
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`)
     }
@@ -240,7 +248,9 @@ export const fetchVoiceModel = async (
       if (error instanceof TtsCanceledError || options.signal?.aborted) {
         throw new TtsCanceledError()
       }
-      failures.push(`${sourceLabel(source.kind)}：${error instanceof Error ? error.message : '未知错误'}`)
+      const reason = error instanceof Error ? error.message : '未知错误'
+      failures.push(`${sourceLabel(source.kind)}：${reason}`)
+      console.warn(`[tts] 语音模型来源不可用（${sourceLabel(source.kind)}）：${reason}`)
     }
   }
 
