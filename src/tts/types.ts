@@ -18,6 +18,8 @@ export interface TtsSpeakOptions {
   rate: number
   onStart?: () => void
   onEnd?: () => void
+  /** Preparation progress (model download, engine init) for engines that need it. */
+  onProgress?: (progress: TtsProgress) => void
 }
 
 export interface TtsEngine {
@@ -33,7 +35,7 @@ export interface TtsEngine {
 
 /** A selectable voice entry shown in the UI. */
 export interface TtsVoiceOption {
-  /** Unique value bound to the `<select>`; `${engineId}:${voiceId}` or `auto`. */
+  /** Unique value bound to the `<select>`: `${engineId}:${voiceId}`. */
   key: string
   engineId: TtsEngineId
   voiceId?: string
@@ -42,6 +44,7 @@ export interface TtsVoiceOption {
   available: boolean
 }
 
+/** Legacy value, kept only so persisted settings from older versions can be migrated. */
 export const AUTO_VOICE_KEY = 'auto'
 
 /** Raised when the browser refused playback because no user gesture happened yet. */

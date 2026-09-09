@@ -72,6 +72,7 @@ export class PiperEngine implements TtsEngine {
   private readonly options: PiperEngineOptions
   private status: TtsEngineStatus = 'idle'
   private voices: PiperVoiceEntry[] = []
+  private voicesPromise: Promise<PiperVoiceEntry[]> | null = null
   private voice: PiperVoiceEntry | null = null
   private config: PiperVoiceConfig | null = null
   private mirrorBase = ''
@@ -103,6 +104,30 @@ export class PiperEngine implements TtsEngine {
     return this.voices
   }
 
+  /**
+   * Loads the voice manifest (a few KB) without touching the 60MB model, so the
+   * UI can list voices immediately instead of showing an empty dropdown while
+   * the engine prepares.
+   */
+  async loadVoices(): Promise<PiperVoiceEntry[]> {
+    if (this.voices.length > 0) {
+      return this.voices
+    }
+    if (this.voicesPromise) {
+      return this.voicesPromise
+    }
+    this.voicesPromise = loadVoiceManifest()
+      .then((manifest) => {
+        this.voices = manifest.voices
+        this.mirrorBase = resolveMirrorBase(manifest)
+        return this.voices
+      })
+      .finally(() => {
+        this.voicesPromise = null
+      })
+    return this.voicesPromise
+  }
+
   getSelectedVoiceId(): string {
     return this.voice?.id ?? ''
   }
@@ -119,6 +144,9 @@ export class PiperEngine implements TtsEngine {
     this.options.voiceId = voiceId
     this.prepareController?.abort()
     this.prepareController = null
+    // Drop the in-flight prepare promise so the next prepare() starts for the
+    // newly selected voice instead of reusing the previous voice's session.
+    this.preparing = null
     this.session?.release()
     this.session = null
     this.config = null
@@ -147,6 +175,13 @@ export class PiperEngine implements TtsEngine {
     this.status = 'preparing'
     const controller = new AbortController()
     this.prepareController = controller
+    let lastMark = performance.now()
+    const timings: string[] = []
+    const mark = (label: string) => {
+      const now = performance.now()
+      timings.push(`${label} ${((now - lastMark) / 1000).toFixed(1)}s`)
+      lastMark = now
+    }
 
     try {
       const ort = await loadOrt()
@@ -158,12 +193,7 @@ export class PiperEngine implements TtsEngine {
         message: '语音运行时已加载',
       })
 
-      if (this.voices.length === 0) {
-        const manifest = await loadVoiceManifest()
-        this.voices = manifest.voices
-        this.mirrorBase = resolveMirrorBase(manifest)
-      }
-      if (this.voices.length === 0) {
+      if ((await this.loadVoices()).length === 0) {
         throw new Error('未找到本地语音模型，请先运行 npm run tts:setup。')
       }
 
@@ -181,16 +211,38 @@ export class PiperEngine implements TtsEngine {
         if (controller.signal.aborted) {
           throw new TtsCanceledError()
         }
+        mark('下载')
+
+        // Session creation compiles a ~63MB graph and can take tens of seconds
+        // on a single-threaded WASM runtime, so keep the user informed.
+        onProgress?.({
+          stage: 'model',
+          loaded: 1,
+          total: 1,
+          ratio: 1,
+          message: '模型已下载，正在初始化语音引擎（首次约需 10–60 秒）…',
+          source: this.modelSource ?? undefined,
+        })
         this.session = await ort.InferenceSession.create(buffer, {
           executionProviders: ['wasm'],
         })
+        mark('会话')
       }
 
       if (!this.phonemizeModule) {
+        onProgress?.({
+          stage: 'runtime',
+          loaded: 1,
+          total: 1,
+          ratio: 1,
+          message: '语音引擎已就绪，正在加载音素引擎（约 18MB）…',
+        })
         this.phonemizeModule = await this.createPhonemizeModule()
+        mark('音素')
       }
 
       this.status = 'ready'
+      console.info(`[tts] 声线 ${voice.id} 就绪：${timings.join(' · ')}`)
       onProgress?.({ stage: 'voice', loaded: 1, total: 1, ratio: 1, message: '语音已就绪' })
     } catch (error) {
       this.status = 'error'
@@ -430,11 +482,18 @@ export class PiperEngine implements TtsEngine {
     }
 
     const generation = ++this.generation
-    await this.prepare()
+    await this.prepare(options.onProgress)
     if (generation !== this.generation) {
       throw new TtsCanceledError()
     }
 
+    options.onProgress?.({
+      stage: 'synthesis',
+      loaded: 1,
+      total: 1,
+      ratio: 1,
+      message: '正在合成语音…',
+    })
     const blob = await this.synthesize(trimmed, options.rate, generation)
     if (generation !== this.generation) {
       throw new TtsCanceledError()

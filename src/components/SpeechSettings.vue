@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import type { SpeechRatePreset } from '../types/practice'
 import type { TtsEngineStatus, TtsModelSource, TtsProgress, TtsVoiceOption } from '../tts/types'
 
@@ -19,6 +19,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:selectedVoiceKey': [key: string]
   'update:ratePreset': [preset: SpeechRatePreset]
+  'voice-change': [key: string]
   test: []
 }>()
 
@@ -37,6 +38,12 @@ const STATUS_LABELS: Record<TtsEngineStatus, string> = {
   error: '加载失败',
 }
 
+const SOURCE_LABELS: Record<TtsModelSource, string> = {
+  cache: '本地缓存',
+  mirror: '镜像站',
+  server: '服务器',
+}
+
 const groupedOptions = computed(() => {
   const groups = new Map<string, TtsVoiceOption[]>()
   for (const option of props.voiceOptions) {
@@ -47,15 +54,31 @@ const groupedOptions = computed(() => {
   return [...groups.entries()].map(([group, options]) => ({ group, options }))
 })
 
-const SOURCE_LABELS: Record<TtsModelSource, string> = {
-  cache: '本地缓存',
-  mirror: '镜像站',
-  server: '服务器',
-}
+/** Ticks while preparing so a long engine init never looks frozen. */
+const elapsedSeconds = ref(0)
+let ticker: ReturnType<typeof setInterval> | undefined
+watch(
+  () => props.isPreparing,
+  (preparing) => {
+    clearInterval(ticker)
+    ticker = undefined
+    if (!preparing) {
+      elapsedSeconds.value = 0
+      return
+    }
+    elapsedSeconds.value = 0
+    ticker = setInterval(() => {
+      elapsedSeconds.value += 1
+    }, 1000)
+  },
+  { immediate: true },
+)
+onUnmounted(() => clearInterval(ticker))
 
 const statusText = computed(() => {
   if (props.isPreparing) {
-    return props.prepareProgress?.message ?? '准备中…'
+    const message = props.prepareProgress?.message ?? '准备中…'
+    return elapsedSeconds.value > 2 ? `${message} ${elapsedSeconds.value}s` : message
   }
   const base = STATUS_LABELS[props.engineStatus]
   if (props.engineStatus === 'ready' && props.modelSource) {
@@ -67,6 +90,12 @@ const statusText = computed(() => {
 const showSetupHint = computed(
   () => !props.isPreparing && props.engineStatus === 'error' && !props.hasLocalVoice,
 )
+
+const onVoiceChange = (event: Event) => {
+  const key = (event.target as HTMLSelectElement).value
+  emit('update:selectedVoiceKey', key)
+  emit('voice-change', key)
+}
 </script>
 
 <template>
@@ -76,14 +105,8 @@ const showSetupHint = computed(
     <div class="settings-grid">
       <label class="field">
         <span>语音</span>
-        <select
-          :value="selectedVoiceKey"
-          :disabled="voiceOptions.length === 0"
-          @change="
-            emit('update:selectedVoiceKey', (($event.target as HTMLSelectElement).value))
-          "
-        >
-          <option v-if="voiceOptions.length === 0" value="" disabled>暂无可用语音</option>
+        <select :value="selectedVoiceKey" :disabled="voiceOptions.length === 0" @change="onVoiceChange">
+          <option v-if="voiceOptions.length === 0" value="" disabled>正在读取语音列表…</option>
           <optgroup v-for="entry in groupedOptions" :key="entry.group" :label="entry.group">
             <option v-for="option in entry.options" :key="option.key" :value="option.key">
               {{ option.label }}
@@ -110,7 +133,7 @@ const showSetupHint = computed(
         <span>试听</span>
         <div class="field-row">
           <button type="button" :disabled="!canTest" @click="emit('test')">朗读示例</button>
-          <span class="status-chip">{{ statusText }}</span>
+          <span class="status-chip" :class="{ 'status-chip--busy': isPreparing }">{{ statusText }}</span>
         </div>
       </div>
     </div>

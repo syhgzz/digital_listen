@@ -61,6 +61,13 @@ useGlobalShortcuts({
   onRestart: restartSession,
 })
 
+/** Switching voice should demonstrate it right away; progress shows in the chip. */
+const onVoiceChange = () => {
+  if (currentItem.value) {
+    void speak(currentItem.value.speakText)
+  }
+}
+
 onMounted(() => {
   startSession()
 })
@@ -88,6 +95,7 @@ onMounted(() => {
         :model-source="modelSource"
         @update:selected-voice-key="selectedVoiceKey = $event"
         @update:rate-preset="selectedRatePreset = $event"
+        @voice-change="onVoiceChange"
         @test="testVoice"
       />
     </div>

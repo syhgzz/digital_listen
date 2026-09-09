@@ -1,5 +1,5 @@
 import type { TtsModelSource, TtsProgress } from './types'
-import { TtsCanceledError } from './types'
+import { AUTO_VOICE_KEY, TtsCanceledError } from './types'
 
 /** Layout written by `scripts/tts-assets.mjs` into `public/tts`. */
 export const TTS_BASE_PATH = '/tts'
@@ -97,6 +97,33 @@ export const resolveMirrorBase = (manifest: PiperVoiceManifest): string => {
   const configured = import.meta.env.VITE_TTS_MIRROR_BASE
   const base = (configured ?? manifest.mirrorBase ?? DEFAULT_MIRROR_BASE).trim()
   return base.replace(/\/+$/, '')
+}
+
+/**
+ * Select key used when the user has no valid stored choice: the preferred
+ * default voice when it is provisioned, otherwise the first available one.
+ */
+export const defaultVoiceKey = (voices: PiperVoiceEntry[]): string => {
+  if (voices.length === 0) {
+    return ''
+  }
+  const preferred = voices.find((voice) => voice.id === DEFAULT_VOICE_ID) ?? voices[0]
+  return `piper:${preferred.id}`
+}
+
+/**
+ * Keeps a stored selection only when it still exists; the legacy `auto` value
+ * (and anything no longer provisioned) falls back to the preferred voice.
+ */
+export const resolveVoiceKey = (
+  storedKey: string | undefined,
+  availableKeys: string[],
+  preferredKey: string,
+): string => {
+  if (storedKey && storedKey !== AUTO_VOICE_KEY && availableKeys.includes(storedKey)) {
+    return storedKey
+  }
+  return preferredKey || availableKeys[0] || ''
 }
 
 /** Ordered model locations: mirror first, app origin as the fallback. */

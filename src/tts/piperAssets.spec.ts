@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildModelSources,
+  defaultVoiceKey,
   deriveRepoPath,
   fetchVoiceModel,
   loadVoiceManifest,
   resolveMirrorBase,
+  resolveVoiceKey,
   type PiperVoiceEntry,
 } from './piperAssets'
+import { PiperEngine } from './piperEngine'
 import { TtsCanceledError } from './types'
 
 const MIRROR = 'https://hf-mirror.example/diffusionstudio/piper-voices/resolve/main'
@@ -74,8 +77,7 @@ describe('buildModelSources', () => {
   })
 })
 
-describe('resolveMirrorBase', () => {
-  it('prefers the manifest value and strips trailing slashes', () => {
+describe('resolveMirrorBase', () => {  it('prefers the manifest value and strips trailing slashes', () => {
     expect(resolveMirrorBase({ mirrorBase: `${MIRROR}/`, voices: [] })).toBe(MIRROR)
   })
 
@@ -91,6 +93,33 @@ describe('resolveMirrorBase', () => {
   it('can disable the mirror with an empty value', () => {
     vi.stubEnv('VITE_TTS_MIRROR_BASE', '')
     expect(resolveMirrorBase({ mirrorBase: MIRROR, voices: [] })).toBe('')
+  })
+})
+
+describe('defaultVoiceKey / resolveVoiceKey', () => {
+  const voices: PiperVoiceEntry[] = [
+    { ...voice, id: 'en_GB-alan-medium' },
+    { ...voice, id: 'en_US-lessac-medium' },
+  ]
+
+  it('prefers lessac as the default regardless of manifest order', () => {
+    expect(defaultVoiceKey(voices)).toBe('piper:en_US-lessac-medium')
+    expect(defaultVoiceKey([])).toBe('')
+  })
+
+  it('keeps a stored selection that still exists', () => {
+    expect(
+      resolveVoiceKey('piper:en_GB-alan-medium', ['piper:en_GB-alan-medium'], 'piper:en_US-lessac-medium'),
+    ).toBe('piper:en_GB-alan-medium')
+  })
+
+  it('migrates the legacy auto value and unknown voices to the default', () => {
+    expect(resolveVoiceKey('auto', ['piper:en_US-lessac-medium'], 'piper:en_US-lessac-medium')).toBe(
+      'piper:en_US-lessac-medium',
+    )
+    expect(
+      resolveVoiceKey('piper:gone', ['piper:en_US-lessac-medium'], 'piper:en_US-lessac-medium'),
+    ).toBe('piper:en_US-lessac-medium')
   })
 })
 
@@ -191,5 +220,24 @@ describe('loadVoiceManifest', () => {
   it('tolerates a manifest without a voices array', async () => {
     stubFetch(() => new Response('{}', { status: 200 }))
     expect(await loadVoiceManifest()).toEqual({ voices: [] })
+  })
+})
+
+describe('PiperEngine.loadVoices', () => {
+  it('fetches the manifest once and reuses the cached list', async () => {
+    const mock = stubFetch((url) =>
+      url.endsWith('manifest.json')
+        ? new Response(JSON.stringify({ mirrorBase: MIRROR, voices: [voice] }), { status: 200 })
+        : binaryResponse([], 404),
+    )
+
+    const engine = new PiperEngine()
+    const first = await engine.loadVoices()
+    const second = await engine.loadVoices()
+
+    expect(first).toHaveLength(1)
+    expect(first[0].id).toBe('en_US-lessac-medium')
+    expect(second).toBe(first)
+    expect(mock).toHaveBeenCalledTimes(1)
   })
 })

@@ -340,3 +340,8 @@ body {
 .question-card.empty {
   color: #486581;
 }
+
+.status-chip--busy {
+  background: #fff4e5;
+  color: #b54708;
+}

@@ -1,8 +1,8 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { SpeechRatePreset } from '../types/practice'
 import { createTtsEngines, type TtsEngines } from '../tts'
+import { defaultVoiceKey, resolveVoiceKey } from '../tts/piperAssets'
 import {
-  AUTO_VOICE_KEY,
   TtsCanceledError,
   isCanceledError,
   isPlaybackBlockedError,
@@ -44,7 +44,7 @@ declare global {
 const TEST_SENTENCE = 'This is the listening voice.'
 
 export const useTts = (options: UseTtsOptions = {}) => {
-  const selectedVoiceKey = ref(options.initialVoiceKey ?? AUTO_VOICE_KEY)
+  const selectedVoiceKey = ref(options.initialVoiceKey ?? '')
   const selectedRatePreset = ref<SpeechRatePreset>(options.initialRatePreset ?? 'normal')
   const voiceOptions = ref<TtsVoiceOption[]>([])
   const speaking = ref(false)
@@ -83,6 +83,7 @@ export const useTts = (options: UseTtsOptions = {}) => {
 
   let speakGeneration = 0
   let pendingGestureText: string | null = null
+  let lastSpokenVoiceKey = ''
   let disposed = false
 
   const rate = computed(() => speechRateByPreset[selectedRatePreset.value])
@@ -90,12 +91,16 @@ export const useTts = (options: UseTtsOptions = {}) => {
 
   const selectedOption = computed<TtsVoiceOption>(() => {
     const found = voiceOptions.value.find((option) => option.key === selectedVoiceKey.value)
+    if (found) {
+      return found
+    }
+    const fallbackKey = defaultVoiceKey(engines.piper.getVoices())
     return (
-      found ??
-      voiceOptions.value.find((option) => option.key === AUTO_VOICE_KEY) ?? {
-        key: AUTO_VOICE_KEY,
+      voiceOptions.value.find((option) => option.key === fallbackKey) ??
+      voiceOptions.value[0] ?? {
+        key: fallbackKey,
         engineId: 'piper',
-        label: '自动（本地语音优先）',
+        label: '本地语音',
         group: '本地引擎',
         available: false,
       }
@@ -104,14 +109,6 @@ export const useTts = (options: UseTtsOptions = {}) => {
 
   const buildVoiceOptions = () => {
     const list: TtsVoiceOption[] = []
-
-    list.push({
-      key: AUTO_VOICE_KEY,
-      engineId: 'piper',
-      label: '自动（本地语音优先）',
-      group: '本地引擎',
-      available: engines.piper.getStatus() !== 'unavailable',
-    })
 
     for (const voice of engines.piper.getVoices()) {
       list.push({
@@ -147,9 +144,11 @@ export const useTts = (options: UseTtsOptions = {}) => {
 
     voiceOptions.value = list
     hasLocalVoice.value = engines.piper.getVoices().length > 0
-    if (!list.some((option) => option.key === selectedVoiceKey.value)) {
-      selectedVoiceKey.value = AUTO_VOICE_KEY
-    }
+    selectedVoiceKey.value = resolveVoiceKey(
+      selectedVoiceKey.value,
+      list.map((option) => option.key),
+      defaultVoiceKey(engines.piper.getVoices()),
+    )
   }
 
   const engineForOption = (option: TtsVoiceOption): TtsEngine => {
@@ -194,6 +193,29 @@ export const useTts = (options: UseTtsOptions = {}) => {
     }
   }
 
+  const handleProgress = (progress: TtsProgress) => {
+    prepareProgress.value = progress
+    if (progress.stage === 'voice') {
+      isPreparing.value = false
+    }
+  }
+
+  /** Fetches the (tiny) voice manifest and system voices so the list shows up at once. */
+  const loadVoiceList = async (): Promise<void> => {
+    if (disposed) {
+      return
+    }
+    await engines.piper.loadVoices().catch(() => [])
+    buildVoiceOptions()
+    try {
+      await engines.system.prepare()
+    } catch {
+      // System voices are optional; the local engine is the primary one.
+    }
+    buildVoiceOptions()
+    syncStatus()
+  }
+
   const prepare = async (): Promise<void> => {
     if (disposed) {
       return
@@ -201,9 +223,7 @@ export const useTts = (options: UseTtsOptions = {}) => {
     isPreparing.value = true
     error.value = ''
     try {
-      await engines.piper.prepare((progress) => {
-        prepareProgress.value = progress
-      })
+      await engines.piper.prepare(handleProgress)
     } catch (piperError) {
       error.value = piperError instanceof Error ? piperError.message : '本地语音引擎不可用。'
     }
@@ -212,8 +232,10 @@ export const useTts = (options: UseTtsOptions = {}) => {
     } catch {
       // System voices are optional; the local engine is the primary one.
     }
-    prepareProgress.value = null
-    isPreparing.value = false
+    if (!speaking.value) {
+      prepareProgress.value = null
+      isPreparing.value = false
+    }
     buildVoiceOptions()
     syncStatus()
   }
@@ -238,7 +260,11 @@ export const useTts = (options: UseTtsOptions = {}) => {
     error.value = ''
     notice.value = ''
     const option = selectedOption.value
+    const voiceChanged = option.key !== lastSpokenVoiceKey
     applyVoiceSelection(option)
+    if (voiceChanged && option.engineId === 'piper') {
+      notice.value = `正在准备声线：${option.label}（首次约 60MB，之后会缓存）…`
+    }
 
     const primary = engineForOption(option)
     const chain = [primary, ...engines.chain.filter((engine) => engine !== primary)]
@@ -249,11 +275,18 @@ export const useTts = (options: UseTtsOptions = {}) => {
         return
       }
       activeEngineId.value = engine.id
+      if (engine.kind !== 'system') {
+        isPreparing.value = true
+      }
       try {
         await engine.speak(trimmed, {
           rate: rate.value,
+          onProgress: handleProgress,
           onStart: () => {
             speaking.value = true
+            isPreparing.value = false
+            prepareProgress.value = null
+            notice.value = ''
           },
           onEnd: () => {
             speaking.value = false
@@ -263,12 +296,17 @@ export const useTts = (options: UseTtsOptions = {}) => {
           return
         }
         speaking.value = false
+        isPreparing.value = false
+        prepareProgress.value = null
+        lastSpokenVoiceKey = option.key
         if (engine !== primary) {
           notice.value = `已自动切换到${engine.label}。`
         }
         syncStatus()
         return
       } catch (speakError) {
+        isPreparing.value = false
+        prepareProgress.value = null
         if (speakError instanceof TtsCanceledError || isCanceledError(speakError) || generation !== speakGeneration) {
           return
         }
@@ -304,7 +342,9 @@ export const useTts = (options: UseTtsOptions = {}) => {
   onMounted(() => {
     window.addEventListener('pointerdown', retryPendingAfterGesture, true)
     window.addEventListener('keydown', retryPendingAfterGesture, true)
-    void prepare()
+    // List voices first (a few KB) so the dropdown is never blank, then load
+    // the 60MB model in the background.
+    void loadVoiceList().then(() => prepare())
   })
 
   onUnmounted(() => {
