@@ -134,6 +134,13 @@ body {
   align-items: center;
   gap: 10px;
   min-height: 40px;
+  /* A long status message must wrap to its own line instead of squeezing the button. */
+  flex-wrap: wrap;
+}
+
+/* Row that needs the full card width (button plus status message). */
+.field--wide {
+  grid-column: 1 / -1;
 }
 
 .field-row button,
@@ -145,6 +152,11 @@ body {
   padding: 10px 14px;
   font-size: 14px;
   cursor: pointer;
+}
+
+.field-row button {
+  flex: none;
+  white-space: nowrap;
 }
 
 .field-row button:hover:not(:disabled),

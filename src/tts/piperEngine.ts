@@ -234,7 +234,7 @@ export class PiperEngine implements TtsEngine {
           loaded: 1,
           total: 1,
           ratio: 1,
-          message: '语音引擎已就绪，正在加载音素引擎（约 18MB）…',
+          message: '语音引擎已就绪，正在加载音素引擎…',
         })
         this.phonemizeModule = await this.createPhonemizeModule()
         mark('音素')

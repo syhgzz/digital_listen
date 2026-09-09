@@ -3,6 +3,8 @@
  * Provisions the local (self-hosted) TTS assets into `public/tts`:
  *
  *   node scripts/tts-assets.mjs --runtime                 copy the Piper WASM runtime from node_modules
+ *                                                        (and trim the phonemize data to English)
+ *   node scripts/tts-assets.mjs --runtime --full-phonemize keep the untrimmed phonemize data
  *   node scripts/tts-assets.mjs --defaults                download the default English voice set (~360MB)
  *   node scripts/tts-assets.mjs --voice en_US-amy-medium  download one voice (repeatable)
  *   node scripts/tts-assets.mjs --voices a,b,c            download an explicit voice list
@@ -112,6 +114,104 @@ const copyRuntimeAssets = async () => {
       )
     }
   }
+
+  await prunePhonemizeData()
+}
+
+/**
+ * Trims the Emscripten file package down to English.
+ *
+ * `piper_phonemize.data` ships espeak-ng dictionaries for ~110 languages and is
+ * 18MB, but the app only ever speaks English, which needs `en_dict` alone
+ * (163KB). Every other entry - the core phoneme tables plus all language and
+ * voice definition files - is kept, so voice lookups still work; only the
+ * unused dictionaries are dropped. The file the browser downloads shrinks from
+ * 18MB to ~0.9MB, which matters because it is served from the app origin and
+ * that is usually the slowest hop.
+ *
+ * Escape hatch: `TTS_FULL_PHONEMIZE=1` (or `--full-phonemize`) keeps the
+ * original package, needed if a non-English voice is ever added.
+ */
+const prunePhonemizeData = async () => {
+  if (process.env.TTS_FULL_PHONEMIZE === '1' || args.includes('--full-phonemize')) {
+    log('  音素数据保持全量（TTS_FULL_PHONEMIZE=1）')
+    return
+  }
+
+  const jsPath = path.join(ttsRoot, 'piper', 'piper_phonemize.js')
+  const dataPath = path.join(ttsRoot, 'piper', 'piper_phonemize.data')
+  const source = await readFile(jsPath, 'utf8')
+
+  const filesKey = '"files":['
+  const filesKeyIndex = source.indexOf(filesKey)
+  if (filesKeyIndex < 0) {
+    throw new Error('piper_phonemize.js 中未找到 loadPackage 的文件清单。')
+  }
+  const arrayOpen = filesKeyIndex + filesKey.length - 1
+  const arrayEnd = findArrayEnd(source, arrayOpen + 1)
+  if (arrayEnd < 0) {
+    throw new Error('piper_phonemize.js 的文件清单格式无法解析。')
+  }
+
+  const files = JSON.parse(source.slice(arrayOpen, arrayEnd))
+  const kept = files.filter(
+    (entry) => !entry.filename.endsWith('_dict') || entry.filename.endsWith('/en_dict'),
+  )
+  if (kept.length === files.length) {
+    log('  音素数据无需裁剪')
+    return
+  }
+
+  const data = await readFile(dataPath)
+  const chunks = []
+  let offset = 0
+  const nextFiles = kept.map((entry) => {
+    const start = offset
+    const end = start + (entry.end - entry.start)
+    chunks.push(data.subarray(entry.start, entry.end))
+    offset = end
+    return { filename: entry.filename, start, end }
+  })
+
+  await writeFile(dataPath, Buffer.concat(chunks))
+  const tail = source
+    .slice(arrayEnd)
+    .replace(/("remote_package_size"\s*:\s*)\d+/, `$1${offset}`)
+  await writeFile(jsPath, `${source.slice(0, arrayOpen)}${JSON.stringify(nextFiles)}${tail}`)
+
+  log(
+    `  音素数据已裁剪：${(data.length / 1048576).toFixed(1)}MB → ${(offset / 1048576).toFixed(1)}MB` +
+      `（保留 ${kept.length}/${files.length} 个文件，仅去掉非英文词典）`,
+  )
+}
+
+/** Index just past the `]` matching the `[` that opened the array at `start`. */
+const findArrayEnd = (text, start) => {
+  // `start` is the first character *inside* the array, so the opening bracket
+  // is already counted.
+  let depth = 1
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index]
+    if (char === '"') {
+      index += 1
+      while (index < text.length && text[index] !== '"') {
+        if (text[index] === '\\') {
+          index += 1
+        }
+        index += 1
+      }
+      continue
+    }
+    if (char === '[') {
+      depth += 1
+    } else if (char === ']') {
+      depth -= 1
+      if (depth === 0) {
+        return index + 1
+      }
+    }
+  }
+  return -1
 }
 
 const download = async (url, onProgress) => {

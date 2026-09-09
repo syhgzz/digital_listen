@@ -54,16 +54,19 @@
    `VITE_TTS_MIRROR_BASE=https://<cdn>/piper-voices ./deploy.sh`——代码里的「镜像」是任意 URL，
    manifest 也会写入同一个值。
 
-> 首次加载在模型下载完成后还需要约 10–60 秒初始化（编译 63MB 模型图 + 加载 18MB 音素数据），
+> 首次加载在模型下载完成后还需要约 10–60 秒初始化（编译 63MB 模型图 + 加载音素引擎），
 > 期间状态标签会显示「正在初始化语音引擎…」与已耗时秒数，控制台还会打印各阶段耗时
 > （`[tts] 声线 … 就绪：下载 Xs · 会话 Ys · 音素 Zs`）。
+> 音素数据在构建时已裁剪：`piper_phonemize.data` 原始 18MB（含 ~110 种语言的 eSpeak 词典），
+> 只保留英文 `en_dict` 后约 **0.9MB**，其余语言/语音定义文件全部保留。
+> 需要非英文声线时用 `TTS_FULL_PHONEMIZE=1 ./deploy.sh` 回到全量数据。
 > 用 **HTTPS** 部署时页面才会进入 `crossOriginIsolated`，ONNX Runtime 可多线程，初始化和合成都更快；
 > 当前 HTTP 访问为单线程。
 
 ## 准备语音资源
 
 ```bash
-npm install          # 自动复制 Piper 的 WASM 运行时到 public/tts
+npm install          # 复制 Piper WASM 运行时到 public/tts，并把音素数据裁剪到英文（18MB → 0.9MB）
 npm run tts:setup    # 下载默认的 6 条英文声线（约 360MB）到 public/tts/voices
 npm run dev
 ```

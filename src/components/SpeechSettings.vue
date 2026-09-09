@@ -129,7 +129,7 @@ const onVoiceChange = (event: Event) => {
         </select>
       </label>
 
-      <div class="field">
+      <div class="field field--wide">
         <span>试听</span>
         <div class="field-row">
           <button type="button" :disabled="!canTest" @click="emit('test')">朗读示例</button>
